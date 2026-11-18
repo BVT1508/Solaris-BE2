@@ -16,12 +16,44 @@ const BODYLESS = new Set(["GET", "HEAD", "OPTIONS"]);
 const tooLarge = () => new AppError("Nội dung gửi lên quá lớn.", 413);
 const badJson = () =>
   new AppError("Nội dung gửi lên không phải JSON hợp lệ.", 400);
+const unsupported = () =>
+  new AppError("Kiểu nội dung gửi lên không được hỗ trợ.", 415);
+
+// Tham số charset của Content-Type, có hoặc không có nháy kép; khai nhiều lần thì lấy lần cuối (như gói content-type).
+const CHARSET = /;\s*charset\s*=\s*(?:"([^"]*)"|([^\s;"]+))/gi;
+const charsetOf = (type) => {
+  let found;
+  for (const match of type.matchAll(CHARSET)) found = match[1] ?? match[2];
+  return (found ?? "utf-8").toLowerCase();
+};
+
+/** Như `hasBody` của body-parser: request có khai body (kể cả body rỗng với Content-Length: 0) thì mới xét tiếp. */
+const hasBody = (c) => {
+  const length = c.req.header("content-length");
+  return (
+    (length !== undefined && !Number.isNaN(Number(length))) ||
+    c.req.header("transfer-encoding") !== undefined ||
+    c.req.raw.body !== null
+  );
+};
 
 export const parseBody = async (c, next) => {
   const type = c.req.header("content-type") || "";
   if (BODYLESS.has(c.req.method) || !/[/+]json\b/i.test(type)) {
     await next();
     return;
+  }
+
+  // Body-parser của backend cũ từ chối 415 trước khi đọc body, theo đúng thứ tự này: charset, rồi content-encoding.
+  if (hasBody(c)) {
+    // Chỉ nhận UTF-8. Bản cũ còn giải mã được UTF-16 và UTF-32 (không trình duyệt nào gửi JSON kiểu đó): ở đây cũng 415.
+    if (charsetOf(type) !== "utf-8") throw unsupported();
+    // Bản cũ tự giải nén gzip, deflate, br, zstd. Ở đây không giải nén (tốn CPU, và trần kích thước phải tính sau giải nén):
+    // mọi content-encoding khác identity đều 415. Trình duyệt không nén body của request nên frontend không bị ảnh hưởng.
+    const encoding = (c.req.header("content-encoding") || "identity")
+      .trim()
+      .toLowerCase();
+    if (encoding !== "identity") throw unsupported();
   }
 
   const limit = PAGES_ROUTE.test(c.req.path) ? PAGES_LIMIT : DEFAULT_LIMIT;
