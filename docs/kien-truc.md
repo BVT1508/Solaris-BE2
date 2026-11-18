@@ -581,6 +581,7 @@ Mẫu thật đang chạy: `src/services/authService.js` (đọc một truy vấ
 
 - `member.leadOrders` (ở `GET /auth/me`): bản cũ sắp theo lúc được chọn làm leader, bản mới theo lúc tham gia đơn (`created_at` của dòng `order_members`, rồi `order_id`). Tập giá trị như nhau; chỉ lệch thứ tự khi một người làm leader ở nhiều đơn theo thứ tự khác thứ tự tham gia.
 - Mọi câu `ORDER BY` trên cột không duy nhất có thêm `id` làm cột phá hòa (`ORDER BY name, id`), để hai lần gọi cho cùng một thứ tự.
+- Body JSON nén hoặc không phải UTF-8 (`bodyMiddleware.js`): bản cũ (body-parser) tự giải nén `gzip`, `deflate`, `br`, `zstd` và giải mã được UTF-16, UTF-32; bản mới trả 415 "Kiểu nội dung gửi lên không được hỗ trợ." cho mọi content-encoding khác `identity` và mọi `charset` khác `utf-8`. Các trường hợp bản cũ đã trả 415 (charset lạ như `latin1`, cả `utf8` viết liền; content-encoding lạ) thì giống hệt. Trình duyệt không nén body của request và luôn gửi UTF-8, nên frontend không gặp.
 
 ### Bẫy khi chép code cũ
 
