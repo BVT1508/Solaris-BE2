@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Trạng thái các gói
 
-Cả bốn gói xong. Lượt chạy cả bộ chốt (`qa-scripts/cf/ket-qua/2026-11-18_230411_x-ca-bo-2`, D1 trống, server của phiên X ở cổng 4001, code của cả X lẫn Y tới commit `1c1e178` cộng các commit của X sau đó): **406/406 request, 1377/1377 phép kiểm, 0 lỗi, 0 thiếu**, bằng đúng số gốc của backend cũ.
+Cả bốn gói xong. Lượt chạy cả bộ chốt (`qa-scripts/cf/ket-qua/2026-11-18_*_x-chot-2`, D1 trống, server của phiên X ở cổng 4001, code trên đĩa lúc 23 giờ 18/11 gồm commit `b1e60c4` cộng các file phiên Y đang sửa dở, server không nạp lại lần nào trong lượt chạy): **406/406 request, 1377/1377 phép kiểm, 0 lỗi, 0 thiếu**, bằng đúng số gốc của backend cũ. Lượt ngay trước đó (`..._x-chot`) có một request nhận 503 "Your worker restarted mid-request" vì `wrangler dev` nạp lại code khi phiên Y lưu file giữa lượt chạy, kéo theo 5 phép kiểm trượt ở nhóm 07: không phải lỗi code. Khi chấm, đếm dòng `Reloading local server` trong log của server; khác 0 thì chạy lại.
 
 | Gói | Nội dung                                        | Thư mục Postman chấm gói              | Kết quả                                      |
 | --- | ----------------------------------------------- | ------------------------------------- | -------------------------------------------- |
