@@ -118,135 +118,103 @@ const isOwnFeedback = (fb, viewer) =>
   ((Boolean(fb.shareLink) && fb.shareLink === viewer.linkId) ||
     (Boolean(viewer.deviceHash) && fb.authorDeviceHash === viewer.deviceHash));
 
-/**
- * Mốc thay đổi mà khách thấy được. Không dùng updatedAt của bản ghi: ghi chú nội bộ của team cũng làm nó đổi,
- * khách nhìn vào sẽ biết team vừa trao đổi riêng trên bài nào.
- */
-const guestUpdatedAt = (fb, visibleReplies) => {
-  if (fb.status === "draft") return fb.updatedAt;
-  const marks = [
-    fb.createdAt,
-    fb.submittedAt,
-    fb.resolvedAt,
-    fb.confirmedAt,
-    ...visibleReplies.map((reply) => reply.createdAt),
-  ].filter(Boolean);
-  // Mọi mốc đều là chuỗi ISO cùng dạng nên so chuỗi là so thời gian.
-  return marks.reduce((latest, mark) => (mark > latest ? mark : latest));
-};
+// ---------- Bản trả về: SQLite dựng sẵn JSON ----------
 
 /**
- * Bản cho khách: không có băm thiết bị, người xử lý, ghi chú "chỉ team" hay bất cứ thứ gì nội bộ.
- * mine: bài của người đang xem (được sửa, xóa khi còn nháp).
+ * Bản trả ra của một góp ý được SQLite dựng sẵn thành chuỗi JSON ngay trong câu SELECT (json_object); Worker chỉ nối chuỗi.
+ *
+ * Vì sao: gói miễn phí cho 10 ms CPU mỗi request. Đọc từng dòng, JSON.parse các cột JSON, dựng object rồi JSON.stringify
+ * cả danh sách tốn hơn 10 ms khi danh sách có vài trăm bài (đo trên Cloudflare: 500 bài tốn 18 tới 41 ms).
+ * Việc dựng JSON trong câu SELECT chạy ở D1, không tính vào CPU của Worker.
+ *
+ * Muốn vậy, dữ liệu lưu sẵn ở dạng trả ra: `mark`, `anchor` được chuẩn hóa lúc GHI (toMark, toAnchor ở placementColumns);
+ * `replies` lưu đúng dạng bản của team cộng `deviceHash` (newReply). Đổi dạng trả ra thì sửa cả chỗ ghi lẫn câu SELECT ở đây.
+ *
+ * Riêng ảnh chụp phải ký URL bằng khóa bí mật nên vẫn làm ở JavaScript: câu SELECT đặt "screenshot":null ở CUỐI object và
+ * trả cột screenshot thô; `finishView` ghép phần đã ký vào cho những bài có ảnh.
  */
-const toGuestView = (fb, viewer) => {
-  const visibleReplies = (fb.replies || []).filter(
-    (reply) => reply.visibility === "customer"
-  );
-  return {
-    id: fb.id,
-    seq: fb.seq,
-    clientId: fb.clientId,
-    body: fb.body,
-    authorName: fb.authorName,
-    authorKind: fb.authorKind,
-    mine: isOwnFeedback(fb, viewer),
-    status: fb.status,
-    roundNumber: fb.roundNumber,
-    target: toTarget(fb),
-    mark: toMark(fb.mark),
-    anchor: toAnchor(fb.anchor),
-    screenshot: toScreenshot(fb.screenshot),
-    replies: visibleReplies.map((reply) => ({
-      id: reply.id,
-      body: reply.body,
-      authorName: reply.authorName,
-      authorKind: reply.authorKind,
-      mine:
-        reply.authorKind === "guest" &&
-        Boolean(viewer.deviceHash) &&
-        reply.deviceHash === viewer.deviceHash,
-      createdAt: reply.createdAt,
-    })),
-    reopenedCount: fb.reopenedCount || 0,
-    // Vòng mà khách bấm "Cần sửa tiếp" lần gần nhất; bằng vòng hiện tại thì bài này đang chờ gửi lại cho team.
-    reopenedRoundNumber: fb.reopenedRoundNumber || null,
-    createdAt: fb.createdAt,
-    updatedAt: guestUpdatedAt(fb, visibleReplies),
-  };
-};
+const TARGET_JSON = `json(CASE WHEN f.target_file_id IS NULL THEN NULL
+      ELSE json_object('fileId', f.target_file_id, 'page', f.target_page) END)`;
 
-/**
- * Câu SELECT cho bản của team: góp ý kèm tên người xử lý, tên sản phẩm, tên đơn (thay cho populate của Mongoose).
- * Bí danh f cho bảng feedback để nơi gọi viết điều kiện.
- */
-const TEAM_SELECT = sql.raw(`
-  SELECT f.*, a.name AS assignee_name, a.email AS assignee_email,
-         d.name AS deliverable_name, d.type AS deliverable_type, o.title AS order_title
+/** Bản cho team: thêm người xử lý, mọi trả lời kể cả ghi chú nội bộ (bỏ băm thiết bị), mốc thời gian xử lý. Bí danh f. */
+const TEAM_VIEW = sql.raw(`
+  SELECT json_object(
+    'id', f.id, 'seq', f.seq, 'body', f.body,
+    'authorName', f.author_name, 'authorKind', f.author_kind, 'authorMemberId', f.author_member_id,
+    'visibility', f.visibility, 'status', f.status, 'roundNumber', f.round_number, 'shareLinkId', f.share_link_id,
+    'order', json_object('id', f.order_id, 'title', o.title),
+    'deliverable', json_object('id', f.deliverable_id, 'name', d.name, 'type', d.type),
+    'target', ${TARGET_JSON}, 'mark', json(f.mark), 'anchor', json(f.anchor),
+    'assignee', json(CASE WHEN a.id IS NULL THEN NULL
+      ELSE json_object('id', a.id, 'name', a.name, 'email', a.email) END),
+    'replies', json((
+      SELECT json_group_array(json_remove(r.value, '$.deviceHash') ORDER BY r.key) FROM json_each(f.replies) r)),
+    'reopenedCount', f.reopened_count, 'submittedAt', f.submitted_at, 'resolvedAt', f.resolved_at,
+    'confirmedAt', f.confirmed_at, 'version', f.version, 'createdAt', f.created_at, 'updatedAt', f.updated_at,
+    'screenshot', NULL
+  ) AS view, f.screenshot AS shot
   FROM feedback f
   JOIN deliverables d ON d.id = f.deliverable_id
   JOIN orders o ON o.id = f.order_id
   LEFT JOIN members a ON a.id = f.assignee_id`);
 
-/** Bản cho team: thêm người xử lý, mọi trả lời kể cả ghi chú nội bộ, mốc thời gian xử lý. */
-const toTeamView = (row) => {
-  const fb = fromRow(row);
-  return {
-    id: fb.id,
-    seq: fb.seq,
-    body: fb.body,
-    authorName: fb.authorName,
-    authorKind: fb.authorKind,
-    authorMemberId: fb.authorMember || null,
-    visibility: fb.visibility,
-    status: fb.status,
-    roundNumber: fb.roundNumber,
-    shareLinkId: fb.shareLink || null,
-    order: { id: fb.order, title: row.order_title },
-    deliverable: {
-      id: fb.deliverable,
-      name: row.deliverable_name,
-      type: row.deliverable_type,
-    },
-    target: toTarget(fb),
-    mark: toMark(fb.mark),
-    anchor: toAnchor(fb.anchor),
-    screenshot: toScreenshot(fb.screenshot),
-    assignee:
-      fb.assignee && row.assignee_name !== null
-        ? {
-            id: fb.assignee,
-            name: row.assignee_name,
-            email: row.assignee_email,
-          }
-        : null,
-    replies: (fb.replies || []).map((reply) => ({
-      id: reply.id,
-      body: reply.body,
-      authorName: reply.authorName,
-      authorKind: reply.authorKind,
-      authorMemberId: reply.authorMember || null,
-      visibility: reply.visibility,
-      createdAt: reply.createdAt,
-    })),
-    reopenedCount: fb.reopenedCount || 0,
-    submittedAt: fb.submittedAt || null,
-    resolvedAt: fb.resolvedAt || null,
-    confirmedAt: fb.confirmedAt || null,
-    version: fb.version,
-    createdAt: fb.createdAt,
-    updatedAt: fb.updatedAt,
-  };
+/**
+ * Bản cho khách: không có băm thiết bị, người xử lý, ghi chú "chỉ team" hay bất cứ thứ gì nội bộ.
+ * mine: bài của người đang xem (cùng link hoặc cùng máy; được sửa, xóa khi còn nháp).
+ * updatedAt: mốc thay đổi mà khách thấy được. Không dùng updated_at của bản ghi (trừ nháp): ghi chú nội bộ của team cũng làm
+ * nó đổi, khách nhìn vào sẽ biết team vừa trao đổi riêng trên bài nào. Mọi mốc là chuỗi ISO cùng dạng nên max() của chuỗi là mốc muộn nhất.
+ * Kèm cột status để nơi gọi đếm nháp. Bí danh f.
+ */
+const guestViewSelect = (viewer) => sql`
+  SELECT json_object(
+    'id', f.id, 'seq', f.seq, 'clientId', f.client_id, 'body', f.body,
+    'authorName', f.author_name, 'authorKind', f.author_kind,
+    'mine', json(CASE WHEN f.author_kind = 'guest'
+        AND (f.share_link_id = ${viewer.linkId} OR f.author_device_hash = ${viewer.deviceHash})
+      THEN 'true' ELSE 'false' END),
+    'status', f.status, 'roundNumber', f.round_number,
+    'target', ${sql.raw(TARGET_JSON)}, 'mark', json(f.mark), 'anchor', json(f.anchor),
+    'replies', json((
+      SELECT json_group_array(json_object(
+        'id', r.value ->> 'id', 'body', r.value ->> 'body',
+        'authorName', r.value ->> 'authorName', 'authorKind', r.value ->> 'authorKind',
+        'mine', json(CASE WHEN r.value ->> 'authorKind' = 'guest' AND r.value ->> 'deviceHash' = ${viewer.deviceHash}
+          THEN 'true' ELSE 'false' END),
+        'createdAt', r.value ->> 'createdAt') ORDER BY r.key)
+      FROM json_each(f.replies) r WHERE r.value ->> 'visibility' = 'customer')),
+    'reopenedCount', f.reopened_count, 'reopenedRoundNumber', f.reopened_round_number,
+    'createdAt', f.created_at,
+    'updatedAt', CASE WHEN f.status = 'draft' THEN f.updated_at ELSE max(
+      f.created_at, coalesce(f.submitted_at, ''), coalesce(f.resolved_at, ''), coalesce(f.confirmed_at, ''),
+      coalesce((SELECT max(r.value ->> 'createdAt') FROM json_each(f.replies) r
+                WHERE r.value ->> 'visibility' = 'customer'), '')) END,
+    'screenshot', NULL
+  ) AS view, f.screenshot AS shot, f.status AS status
+  FROM feedback f`;
+
+const NULL_SHOT = '"screenshot":null}';
+
+/** Chuỗi JSON hoàn chỉnh của một bài: bài có ảnh chụp thì thay "screenshot":null ở cuối bằng ảnh đã ký URL. */
+const finishView = (row) =>
+  row.shot
+    ? `${row.view.slice(0, -NULL_SHOT.length)}"screenshot":${JSON.stringify(
+        toScreenshot(JSON.parse(row.shot))
+      )}}`
+    : row.view;
+
+/** Nối các bài thành một mảng JSON (chuỗi), không parse. */
+const joinViews = (rows) => `[${rows.map(finishView).join(",")}]`;
+
+const viewOf = (row) => {
+  if (!row) throw NOT_FOUND();
+  return JSON.parse(finishView(row));
 };
 
 const teamViewById = async (id) =>
-  toTeamView(await first(sql`${TEAM_SELECT} WHERE f.id = ${id}`));
+  viewOf(await first(sql`${TEAM_VIEW} WHERE f.id = ${id}`));
 
 const guestViewById = async (id, viewer) =>
-  toGuestView(
-    fromRow(await first(sql`SELECT * FROM feedback WHERE id = ${id}`)),
-    viewer
-  );
+  viewOf(await first(sql`${guestViewSelect(viewer)} WHERE f.id = ${id}`));
 
 // ---------- Luật dùng chung ----------
 
@@ -313,12 +281,15 @@ function resolvePlacement(deliverable, { target, mark, anchor }, allowedIds) {
   return { target: { fileId: file.id }, mark: mark || undefined };
 }
 
-/** Vị trí đã kiểm thành các cột của bảng feedback; thứ không có thì NULL. */
+/**
+ * Vị trí đã kiểm thành các cột của bảng feedback; thứ không có thì NULL.
+ * mark và anchor lưu luôn ở dạng trả ra (đủ khóa, thiếu thì null) để câu SELECT chuyển tiếp nguyên văn, không phải dựng lại lúc đọc.
+ */
 const placementColumns = (placement) => ({
   targetFileId: placement.target?.fileId ?? null,
   targetPage: placement.target?.page ?? null,
-  mark: placement.mark ?? null,
-  anchor: placement.anchor ?? null,
+  mark: toMark(placement.mark),
+  anchor: toAnchor(placement.anchor),
 });
 
 /** Khách chỉ góp ý trên bộ file của vòng hiện tại (bản team đã gửi). */
@@ -337,10 +308,28 @@ const bumpSeq = (deliverableId) =>
 const currentSeq = (deliverableId) =>
   sql`(SELECT feedback_seq FROM deliverables WHERE id = ${deliverableId})`;
 
+/**
+ * Một trả lời ở dạng lưu: đúng dạng bản của team trả ra, cộng deviceHash của khách (chỉ để nhận ra "của máy này" ở bản cho khách;
+ * câu SELECT luôn bỏ khóa đó trước khi trả).
+ */
+const newReply = (
+  { authorKind, authorName, authorMember, deviceHash, visibility, body },
+  at
+) => ({
+  id: newId(),
+  body,
+  authorName,
+  authorKind,
+  authorMemberId: authorMember || null,
+  visibility,
+  createdAt: at,
+  ...(deviceHash && { deviceHash }),
+});
+
 /** Câu lệnh thêm một trả lời vào cuối luồng (không đọc rồi ghi), chỉ khi luồng chưa quá dài. */
 const appendReply = (feedbackId, reply) => sql`
   UPDATE feedback SET
-    replies = json_insert(replies, '$[#]', json(${JSON.stringify({ id: newId(), ...reply, createdAt: now() })})),
+    replies = json_insert(replies, '$[#]', json(${JSON.stringify(newReply(reply, now()))})),
     version = version + 1, updated_at = ${now()}
   WHERE id = ${feedbackId} AND json_array_length(replies) < ${MAX_REPLIES}`;
 
@@ -420,9 +409,9 @@ async function findVisibleToGuest(guest, id) {
 /** Điều kiện "nháp của người đang xem": soạn qua cùng link, hoặc trên cùng máy. */
 const ownDraftCondition = (guest) =>
   sql.or([
-    sql`share_link_id = ${guest.link.id}`,
+    sql`f.share_link_id = ${guest.link.id}`,
     ...(guest.deviceHash
-      ? [sql`author_device_hash = ${guest.deviceHash}`]
+      ? [sql`f.author_device_hash = ${guest.deviceHash}`]
       : []),
   ]);
 
@@ -435,18 +424,19 @@ export async function listForGuest(guest) {
   assertCan(guest.actor, "feedback.read", {
     deliverableId: guest.deliverable.id,
   });
-  const base = sql`deliverable_id = ${guest.deliverable.id} AND visibility = 'customer'`;
+  const base = sql`f.deliverable_id = ${guest.deliverable.id} AND f.visibility = 'customer'`;
   const [rows, [{ n: drafts }]] = await readAll([
-    sql`SELECT * FROM feedback
-        WHERE ${base} AND (status <> 'draft' OR ${ownDraftCondition(guest)})
-        ORDER BY seq`,
-    sql`SELECT count(*) AS n FROM feedback WHERE ${base} AND status = 'draft'`,
+    sql`${guestViewSelect(viewerOf(guest))}
+        WHERE ${base} AND (f.status <> 'draft' OR ${ownDraftCondition(guest)})
+        ORDER BY f.seq`,
+    sql`SELECT count(*) AS n FROM feedback f WHERE ${base} AND f.status = 'draft'`,
   ]);
-  const viewer = viewerOf(guest);
-  const list = rows.map(fromRow);
-  const ownDrafts = list.filter((fb) => fb.status === "draft").length;
+  const ownDrafts = rows.filter((row) => row.status === "draft").length;
   return {
-    feedback: list.map((fb) => toGuestView(fb, viewer)),
+    // Mảng góp ý đã là chuỗi JSON; controller ghép vào phong bì, không parse lại.
+    json: joinViews(rows),
+    count: rows.length,
+    // Hai truy vấn không cùng bản chụp: một nháp vừa bị xóa giữa chừng không được làm số này âm.
     otherDrafts: Math.max(0, drafts - ownDrafts),
   };
 }
@@ -491,11 +481,14 @@ export async function createByGuest(guest, input) {
         SELECT * FROM feedback WHERE deliverable_id = ${deliverable.id} AND client_id = ${input.clientId}`)
     );
   const viewer = viewerOf(guest);
-  const replay = (existing) => {
+  const replay = async (existing) => {
     if (!isOwnFeedback(existing, viewer)) {
       throw new AppError("Mã góp ý này đã được dùng.", 409);
     }
-    return { feedback: toGuestView(existing, viewer), created: false };
+    return {
+      feedback: await guestViewById(existing.id, viewer),
+      created: false,
+    };
   };
 
   const existing = await findExisting();
@@ -588,7 +581,7 @@ export async function createByGuest(guest, input) {
         },
       }
     );
-    return { feedback: toGuestView(created, viewer), created: true };
+    return { feedback: await guestViewById(created.id, viewer), created: true };
   } catch (err) {
     if (screenshot) await storage.trashQuietly([screenshot]);
     // Hai request cùng clientId tới gần như cùng lúc: bên thua lấy bài bên thắng vừa tạo.
@@ -621,7 +614,7 @@ export async function attachScreenshotByGuest(guest, id, input) {
     if (fb.status === "draft") throw NOT_FOUND();
     throw new AppError("Chỉ sửa được góp ý của chính bạn.", 403);
   }
-  if (fb.screenshot?.key) return toGuestView(fb, viewer);
+  if (fb.screenshot?.key) return await guestViewById(fb.id, viewer);
   if (!fb.anchor?.pageUrl) {
     throw new AppError("Chỉ góp ý ghim trên site mới có ảnh chụp.", 400);
   }
@@ -647,7 +640,7 @@ export async function attachScreenshotByGuest(guest, id, input) {
     const current = await findInDeliverable(guest, fb.id);
     // Nháp vừa bị xóa trong lúc ảnh còn đang đẩy lên.
     if (!current) throw NOT_FOUND();
-    return toGuestView(current, viewer);
+    return await guestViewById(current.id, viewer);
   }
   // Bài đã gửi cho team: màn của team đang mở lấy lại bài để hiện ảnh.
   if (updated.status !== "draft") {
@@ -659,7 +652,7 @@ export async function attachScreenshotByGuest(guest, id, input) {
       actor: guest.actor,
     });
   }
-  return toGuestView(updated, viewer);
+  return await guestViewById(updated.id, viewer);
 }
 
 /** Sửa nháp của chính mình: nội dung, dấu, vị trí. Ảnh chụp không đổi được. */
@@ -694,7 +687,7 @@ export async function updateDraftByGuest(guest, id, input) {
   if (!updated) {
     throw new AppError("Góp ý đã gửi cho team, không sửa được nữa.", 409);
   }
-  return toGuestView(updated, viewerOf(guest));
+  return await guestViewById(updated.id, viewerOf(guest));
 }
 
 /** Xóa nháp của chính mình. Số thứ tự của nó không cấp lại. */
@@ -805,15 +798,16 @@ export async function verdictByGuest(guest, id, input) {
         ...(input.note
           ? [
               sql`UPDATE feedback SET replies = json_insert(replies, '$[#]', json(${JSON.stringify(
-                {
-                  id: newId(),
-                  authorKind: "guest",
-                  authorName: input.authorName || guest.link.contactName,
-                  deviceHash: guest.deviceHash,
-                  visibility: "customer",
-                  body: input.note,
-                  createdAt: at,
-                }
+                newReply(
+                  {
+                    authorKind: "guest",
+                    authorName: input.authorName || guest.link.contactName,
+                    deviceHash: guest.deviceHash,
+                    visibility: "customer",
+                    body: input.note,
+                  },
+                  at
+                )
               )})) WHERE id = ${fb.id}`,
             ]
           : []),
@@ -904,9 +898,12 @@ function teamFilter(actor, base, query = {}) {
 /** Tối đa LIST_LIMIT bài; truncated cho giao diện biết danh sách đã bị cắt để nhắc người dùng lọc bớt. */
 const listViews = async (where, orderBy) => {
   const rows = await all(sql`
-    ${TEAM_SELECT} WHERE ${sql.and(where)} ORDER BY ${sql.raw(orderBy)} LIMIT ${LIST_LIMIT + 1}`);
+    ${TEAM_VIEW} WHERE ${sql.and(where)} ORDER BY ${sql.raw(orderBy)} LIMIT ${LIST_LIMIT + 1}`);
+  const shown = rows.slice(0, LIST_LIMIT);
+  // Mảng góp ý đã là chuỗi JSON; controller ghép vào phong bì, không parse lại.
   return {
-    feedback: rows.slice(0, LIST_LIMIT).map(toTeamView),
+    json: joinViews(shown),
+    count: shown.length,
     truncated: rows.length > LIST_LIMIT,
   };
 };

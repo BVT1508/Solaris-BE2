@@ -8,15 +8,16 @@ const sendOne = (c, feedback, status = 200) =>
   c.json({ status: "success", data: { feedback } }, status);
 
 export const getFeedback = async (c) => {
-  const { feedback, otherDrafts } = await feedbackService.listForGuest(
+  // Service trả mảng góp ý ở dạng chuỗi JSON đã dựng sẵn; ở đây chỉ ghép phong bì.
+  const { json, count, otherDrafts } = await feedbackService.listForGuest(
     c.get("guest")
   );
 
-  return c.json({
-    status: "success",
-    results: feedback.length,
-    data: { feedback, otherDrafts },
-  });
+  return c.body(
+    `{"status":"success","results":${count},"data":{"feedback":${json},"otherDrafts":${otherDrafts}}}`,
+    200,
+    { "Content-Type": "application/json; charset=utf-8" }
+  );
 };
 
 export const createFeedback = async (c) => {

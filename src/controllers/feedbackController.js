@@ -1,13 +1,15 @@
 import * as feedbackService from "../services/feedbackService.js";
 
-/** Danh sách của team: `truncated` nằm ở đầu body, ngang hàng `results`. */
-const sendList = (c, { feedback, truncated }) =>
-  c.json({
-    status: "success",
-    results: feedback.length,
-    truncated,
-    data: { feedback },
-  });
+/**
+ * Danh sách của team: `results` và `truncated` nằm ở đầu body, ngang hàng `data`.
+ * Service trả mảng góp ý ở dạng chuỗi JSON đã dựng sẵn (xem feedbackService: SQLite dựng JSON); ở đây chỉ ghép phong bì.
+ */
+const sendList = (c, { json, count, truncated }) =>
+  c.body(
+    `{"status":"success","results":${count},"truncated":${truncated},"data":{"feedback":${json}}}`,
+    200,
+    { "Content-Type": "application/json; charset=utf-8" }
+  );
 
 const sendOne = (c, feedback, status = 200) =>
   c.json({ status: "success", data: { feedback } }, status);
