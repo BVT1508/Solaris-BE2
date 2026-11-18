@@ -18,8 +18,7 @@ import { now } from "../utils/time.js";
 import { destroyAllSessionsStatement } from "./authService.js";
 import { unassignOpenWorkStatement } from "./unassignService.js";
 
-const EMAIL_TAKEN = () =>
-  new AppError("Email này đã có trong hệ thống.", 409);
+const EMAIL_TAKEN = () => new AppError("Email này đã có trong hệ thống.", 409);
 const LAST_ADMIN = () =>
   new AppError("Phải còn ít nhất một quản trị viên đang hoạt động.", 409);
 
