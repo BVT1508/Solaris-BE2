@@ -354,6 +354,39 @@ Origin của `bridge.js`, của thư viện chụp ảnh và của trang review 
 | zod với body lớn (1 MB bộ ảnh trang)                                                            | duyệt 30 trang, mỗi trang 300 ghim                          | Chấp nhận; đo ở ngày 3.                                                                                                                                                                       |
 | Băm mật khẩu                                                                                    |                                                             | Hệ thống không có mật khẩu.                                                                                                                                                                   |
 
+### Số đo CPU (18/11/2026)
+
+**Trên Cloudflare thật, bản nền `db3d17d`** (phiên điều phối đo, `cpuTime` từ `wrangler tail`, 50 request liên tiếp):
+
+| Request                                              | CPU trung vị | CPU cao nhất                     | Ghi chú                                                                    |
+| ---------------------------------------------------- | ------------ | -------------------------------- | -------------------------------------------------------------------------- |
+| `GET /auth/me` không cookie (không hỏi database)     | 1 ms         | 12 tới 19 ms ở 5 trên 39 request | các request cao là request đầu của một isolate mới                         |
+| `GET /auth/me` cookie giả (một truy vấn D1, trả 401) | 5 ms         | 8 ms                             | chênh 4 ms so với dòng trên: chưa tách được là do lượt gọi D1 hay thứ khác |
+
+Mọi request vẫn `ok` kể cả cái 19 ms, tức Cloudflare có dung sai, nhưng không được dựa vào đó.
+
+**Bằng Node trên máy dev** (cùng bộ máy V8; `qa-scripts/cf/x_do_cpu_node.mjs` và `x_do_cpu_lanh.mjs`, cấm eval như Worker). Số tuyệt đối khác máy của Cloudflare, dùng để xếp hạng:
+
+| Thứ                                                                 | Chi phí            | Kết luận                                              |
+| ------------------------------------------------------------------- | ------------------ | ----------------------------------------------------- |
+| Request ĐẦU của một tiến trình mới, Hono mặc định, khoảng 140 route | 7,8 ms             | Hono dựng bảng định tuyến ở request đầu               |
+| Như trên, bảng định tuyến dựng sẵn lúc nạp module                   | 2,8 ms             | **đã áp dụng** (`app.router.match` cuối `src/app.js`) |
+| Request ấm qua toàn bộ chuỗi middleware (không tính binding)        | 0,03 tới 0,04 ms   | không phải chỗ tốn                                    |
+| Hai app Hono lồng nhau so với một                                   | không đáng kể      | đã gộp thành một app cho gọn                          |
+| zod: kiểm một body nhỏ (ấm)                                         | 0,01 ms            | không phải chỗ tốn                                    |
+| zod: body có nét vẽ 2.000 điểm                                      | 2 ms               | chấp nhận được, chỉ ở route tạo và sửa góp ý          |
+| In JSON 20, 100, 500 góp ý (30, 149, 748 KB)                        | 0,14; 0,75; 5,0 ms | danh sách 500 bài là rủi ro thật                      |
+| Parse 4 cột JSON của 20, 100, 500 dòng                              | 0,14; 0,81; 3,3 ms | cộng với dòng trên: 500 bài tốn hơn 8 ms              |
+| SHA-256 bằng `node:crypto`                                          | 0,003 ms           | dùng thoải mái                                        |
+| SHA-256 bằng `crypto.subtle`                                        | 0,045 ms           | chậm gấp 15, tránh trong vòng lặp                     |
+| Ký một URL Cloudinary                                               | 0,009 ms           | 100 URL chưa tới 1 ms; đã có bộ nhớ đệm               |
+| Đặt 14 header lên một response                                      | 0,02 ms            | không phải chỗ tốn                                    |
+| Log một dòng mỗi request                                            | 0,001 ms           | không phải chỗ tốn                                    |
+
+**Đã sửa theo số đo** (commit `f89a025`): dựng bảng định tuyến lúc nạp module; một app Hono; `ensureOwner` (hai lượt hỏi database) chỉ chạy ở các đường đăng nhập và trong cron mỗi giờ, không còn ở `/auth/me` là request đầu tiên của mọi lần tải trang. Cả bộ Postman vẫn 406/406 request, 1377/1377 phép kiểm.
+
+**Chưa đo lại trên Cloudflare sau khi sửa, và chưa tách được giá của một lượt gọi D1.** Phiên X không có quyền deploy. Bộ đo đã dựng sẵn ở `D:\Work\New folder\qa-scripts\cf\x-do-cpu\` (xem `README.md` ở đó): bản đo có một route chẩn đoán lặp riêng từng thứ (một truy vấn D1, sáu truy vấn nối tiếp so với một lô sáu câu, lời gọi Rate Limiting binding, lời gọi Durable Object, JSON 500 bài). Phần thuần JavaScript của một request ấm chỉ khoảng 0,05 ms, nên 4 ms chênh lệch ở dòng "cookie giả" gần như chắc chắn nằm ở binding (D1, có thể cả Rate Limiting); số đo đó quyết định luật 1 dưới đây chặt tới đâu.
+
 Lát mẫu (đăng nhập, `me`) chỉ làm vài phép băm và một hai truy vấn, không đáng lo. Không đo được CPU thật trên máy dev.
 
 ## 11. Cấu trúc thư mục, quy ước code, mẫu
@@ -532,6 +565,18 @@ Mẫu thật đang chạy: `src/services/authService.js` (đọc một truy vấ
 - `localeCompare(b, "vi")` trong JS (ví dụ `listAssignableMembers`): giữ nguyên trong JS, không đẩy xuống SQL.
 - Câu SELECT cho danh sách đừng lấy cột JSON lớn không dùng (`replies`, `pages`, `files`).
 - Mọi `Date` trả ra: đã là chuỗi ISO. So thời gian trong JS: `new Date(x).getTime()` như cũ vẫn đúng.
+
+### Luật viết code để giữ CPU dưới 10 ms
+
+Gói miễn phí cho 10 ms CPU mỗi request (thời gian chờ database và kho không tính). Số đo ở mục 10. Xếp theo mức ảnh hưởng:
+
+1. **Ít lượt đi về tới D1 nhất có thể.** Mỗi lượt (`first`, `all`, `run`, `readAll`, `batch`, `transact`) là một lần Worker gói câu lệnh, gọi binding và đọc kết quả. Một lượt `readAll([...])` với năm câu rẻ hơn năm lượt `first`. Mục tiêu cho một request có đăng nhập: `protect` (1 lượt) cộng tối đa 2 lượt nữa cho đọc, và 1 lượt `transact` nếu có ghi. Câu kiểm tồn tại rồi mới đọc chi tiết thì gộp thành một `readAll`. Không gọi D1 trong vòng lặp.
+2. **Không làm việc nặng ở request đầu của isolate.** Thứ gì dựng một lần thì dựng lúc nạp module (schema zod, bảng tra, biểu thức chính quy, bảng định tuyến): lúc nạp module có hạn mức riêng. Không gọi database "để khởi tạo" trên đường của request thường.
+3. **Danh sách không quá lớn.** Đọc 500 góp ý từ D1 rồi in JSON tốn hơn 8 ms. Danh sách có phân trang thì giữ `limit` mặc định nhỏ (20 tới 30). Câu SELECT của danh sách chỉ lấy cột dùng tới; cột JSON lớn (`replies`, `pages`, `files`, `mark` có nét vẽ) chỉ lấy khi màn đó hiện.
+4. **Cột JSON chỉ parse khi cần đọc bên trong.** `Model.fromRow` parse mọi cột JSON có trong dòng: bỏ cột khỏi SELECT là bỏ luôn chi phí parse.
+5. **Băm bằng `node:crypto`** (`sha256Hex` trong `utils/hash.js`), không dùng `crypto.subtle` trong vòng lặp. Ký URL Cloudinary qua `storage.readUrl`, `thumbUrl`, `pageUrls` (có bộ nhớ đệm).
+6. **Việc sau response không tính vào thời gian người dùng chờ nhưng vẫn tính CPU.** `runAfterResponse` (báo trực tiếp, dọn thùng rác kho) dùng chung hạn mức của request: giữ việc nền nhỏ.
+7. **Không cần tối ưu**: middleware, header, log, kiểm zod của body thường, sinh id. Đừng đổi cấu trúc code vì các thứ này.
 
 ### Điều frontend dựa vào, dễ lệch khi viết lại
 

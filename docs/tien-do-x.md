@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Bàn giao (đọc mục này trước nếu vừa mất context)
 
-Cập nhật lần cuối: 18/11/2026, khoảng 23 giờ 30. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+Cập nhật lần cuối: 18/11/2026, gần nửa đêm. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
 
 **Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
 
@@ -24,14 +24,17 @@ Mọi điểm của `docs/soat-thiet-ke.md` giao cho X đã xử lý (bảng ở
 
 **Đang dở: giảm thời gian CPU** (phiên điều phối giao tối 18/11, ưu tiên cao). Bối cảnh: bản nền `db3d17d` đã được phiên điều phối deploy lên Cloudflare thật, Worker `app`, địa chỉ `https://app.solaris-fbs.workers.dev` (tên con là `solaris-fbs`, KHÔNG phải `solaris-feedback`), D1 `solaris` id `c7e83a5a-87eb-417f-9fd2-5a1d05833a11`. Số đo của phiên điều phối (`cpuTime` từ `wrangler tail app --format json`): `/auth/me` không cookie trung vị 1 ms nhưng request đầu của isolate mới 12 tới 19 ms; có cookie giả (một truy vấn D1) trung vị 5 ms, cao nhất 8 ms. Trần gói miễn phí là 10 ms.
 
-Các bước, theo thứ tự (đánh dấu khi xong):
+Các bước, theo thứ tự (cập nhật 18/11, gần nửa đêm):
 
-1. [ ] Sửa địa chỉ deploy trong repo: `wrangler.jsonc` (`vars.CLIENT_ORIGINS` và chú thích đầu file), `docs/kien-truc.md` dòng "Một Worker", `docs/tien-do.md` dòng "Cấu hình deploy": đổi `solaris-feedback` thành `solaris-fbs`.
-2. [ ] Tách cấu hình deploy khỏi cấu hình dev: KHÔNG đổi `database_id` giữ chỗ trong `wrangler.jsonc` (đổi là mọi server dev mất dữ liệu D1 cục bộ). Ý định: script `scripts/make-deploy-config.mjs` sinh `wrangler.deploy.jsonc` (không commit) từ `wrangler.jsonc` với id thật, deploy bằng `wrangler deploy -c wrangler.deploy.jsonc`.
-3. [ ] Deploy một bản ĐO để tìm chỗ tốn CPU. Cách deploy được phép (theo phiên điều phối): `git archive <commit>` ra thư mục tạm, chép `frontend-dist` vào, trong bản tạm đổi `database_id` thành id thật và `CLIENT_ORIGINS` thành địa chỉ thật, `npm ci`, rồi `CI=true npx wrangler deploy --secrets-file <file chỉ có dòng OWNER_EMAIL lấy từ .dev.vars, không in ra>`. Không tạo tài nguyên nào khác, không xóa gì, không bật đăng nhập dev ở bản deploy. Bản đo chỉ khác bản commit ở một route chẩn đoán thêm trong thư mục tạm (đường dẫn có mã ngẫu nhiên), chạy lặp từng thứ nghi ngờ: băm `node:crypto`, một truy vấn D1, ba truy vấn nối tiếp so với một lô ba câu, lời gọi Rate Limiting binding, zod, dựng JSON lớn, ký URL Cloudinary, chuỗi middleware. Đo bằng `npx wrangler tail app --format json` chạy nền trong lúc gửi request, xong thì tắt tiến trình tail.
-4. [ ] Giảm theo kết quả đo. Nghi phạm: mỗi lượt đi về tới D1 tốn CPU (gom đọc bằng `readAll`, ghi bằng lô); bộ định tuyến Hono dựng ở request đầu; `ensureOwner` ở request lạnh; hai app Hono lồng nhau (`src/index.js` gọi `app.fetch`); log mỗi request; 12 header bảo mật mỗi response.
-5. [ ] Deploy lại bản đo, đo sau khi sửa; cuối cùng deploy bản sạch từ commit (không có route chẩn đoán).
-6. [ ] Ghi số đo trước và sau vào `docs/kien-truc.md` mục 10, luật viết code giữ CPU thấp vào mục 11. Sửa file dùng chung thì commit riêng và nêu trong báo cáo cho phiên điều phối.
+1. [x] Sửa địa chỉ deploy trong repo (`d8e0943`).
+2. [x] Tách cấu hình deploy: `node scripts/make-deploy-config.mjs --d1 <id> [--origin <url>]` sinh `wrangler.deploy.jsonc` (không commit), deploy bằng `npx wrangler deploy -c wrangler.deploy.jsonc`. `database_id` giữ chỗ trong `wrangler.jsonc` để nguyên (`d8e0943`).
+3. [ ] Deploy bản đo: **BỊ CHẶN.** Lệnh `wrangler deploy` của phiên X bị lớp kiểm quyền từ chối (không tìm đường vòng). Bộ đo đã dựng sẵn và chạy thử khô ở `D:\Work\New folder\qa-scripts\cf\x-do-cpu\` (`README.md` có đủ lệnh): cần phiên điều phối hoặc chủ dự án deploy, chạy `wrangler tail`, rồi `node x_do_cpu.mjs gui ...` và `doc ...`.
+4. [x] Giảm phần đo được bằng Node (`f89a025`): dựng bảng định tuyến lúc nạp module (request đầu 7,8 ms xuống 2,8 ms trên máy dev), một app Hono, `ensureOwner` chỉ ở đường đăng nhập và cron mỗi giờ. Postman sau khi sửa: 406/406, 1377/1377 (lượt `x-cpu-1`); kịch bản 68 phép vẫn đạt.
+5. [ ] Khi có số đo từ bản đo: nếu một lượt gọi D1 đắt (vài ms), gom các lượt trong service của X bằng `readAll`. Chỗ nên gom trước: `getDeliverable` (tìm sản phẩm rồi nạp vòng: 2 lượt), `listDeliverables` (2), danh sách góp ý của team (tìm sản phẩm rồi liệt kê: 2), `createByGuest` (tìm bài cũ, đếm, lô ghi: 3, cộng 1 của ngữ cảnh khách). Báo phiên Y làm tương tự.
+6. [x] Số đo và luật đã ghi vào `docs/kien-truc.md` mục 10 ("Số đo CPU") và mục 11 ("Luật viết code để giữ CPU dưới 10 ms"). Cần bổ sung số đo thật sau bước 3.
+7. [ ] Sau khi đo xong: deploy lại bản sạch (`bash build-deploy.sh HEAD 0`), không để route chẩn đoán trên bản deploy.
+
+File dùng chung đã sửa trong việc này: `src/app.js`, `src/index.js`, `src/routes/authRoutes.js`, `src/jobs/index.js`, `src/controllers/authController.js`, `wrangler.jsonc`, `.gitignore`, `scripts/make-deploy-config.mjs`, `docs/kien-truc.md`, `docs/tien-do.md`. Phiên Y không phải đổi gì; chỉ cần đọc mục 11 mới về CPU.
 
 **Lệnh và cổng của tôi.** Server thử: `npx wrangler dev --port 4001 --persist-to .wrangler/state-x` (cổng 4000 và `.wrangler/state` để chấm tổng; 4002 và `state-y` của phiên Y). Làm trống: `powershell -ExecutionPolicy Bypass -File "D:\Work\New folder\qa-scripts\cf\x_server.ps1" reset`. Chấm: trong `qa-scripts\cf`, `node chay-postman.js --base-url http://127.0.0.1:4001/api/v1 [-t <thư mục>] --nhan x-<nhãn>`. Kịch bản riêng: `x_kiem_gop_y_team.mjs` (68 phép), `x_kiem_kho_that.mjs` (18, Cloudinary thật), `x_doi_chieu_cloudinary.mjs` (30), `x_do_rename_cloudinary.mjs`. Commit: `git add <file mới>` rồi `git commit -m "<lời>" -- <đường dẫn>` để không cuốn theo file phiên Y đang sửa.
 
