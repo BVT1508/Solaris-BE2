@@ -39,6 +39,14 @@ const NOT_FOUND = () => new AppError("Không tìm thấy góp ý.", 404);
 const ROUND_CLOSED = () =>
   new AppError("Vòng góp ý đã khép. Chờ team gửi bản sửa để góp ý tiếp.", 409);
 const TOO_LONG = () => new AppError("Luồng trao đổi này đã quá dài.", 400);
+const FILE_REPLACED = () =>
+  new AppError("File này đã được thay, hãy góp ý trên bản mới.", 400);
+
+/** Câu thêm trả lời không đổi dòng nào: bài vừa bị xóa thì 404, còn bài mà không thêm được là luồng đã quá dài. */
+const replyRejected = async (feedbackId) =>
+  (await first(sql`SELECT 1 FROM feedback WHERE id = ${feedbackId}`))
+    ? TOO_LONG()
+    : NOT_FOUND();
 
 const fromRow = (row) => Feedback.fromRow(row);
 
@@ -490,14 +498,15 @@ export async function createByGuest(guest, input) {
   const existing = await findExisting();
   if (existing) return replay(existing);
 
-  const { n: sent } = await first(sql`
-    SELECT count(*) AS n FROM feedback WHERE round_id = ${round.id} AND share_link_id = ${link.id}`);
-  if (sent >= MAX_PER_LINK_PER_ROUND) {
-    throw new AppError(
+  const sentCount = sql`
+    SELECT count(*) FROM feedback WHERE round_id = ${round.id} AND share_link_id = ${link.id}`;
+  const TOO_MANY = () =>
+    new AppError(
       "Bạn đã gửi rất nhiều góp ý trong vòng này. Hãy gửi cho team trước khi thêm.",
       429
     );
-  }
+  const { n: sent } = await first(sql`SELECT (${sentCount}) AS n`);
+  if (sent >= MAX_PER_LINK_PER_ROUND) throw TOO_MANY();
 
   let screenshot;
   if (input.screenshotKey) {
@@ -527,6 +536,21 @@ export async function createByGuest(guest, input) {
             sql`SELECT 1 FROM rounds WHERE id = ${round.id} AND status = 'open'`,
             "closed"
           ),
+          // Hạn mức đếm lại ngay trong lô: nhiều request cùng lúc không vượt được trần.
+          guard(
+            sql`SELECT 1 WHERE (${sentCount}) < ${MAX_PER_LINK_PER_ROUND}`,
+            "limit"
+          ),
+          // File được ghim phải còn trong bộ file của vòng lúc ghi (vòng vừa được cập nhật bản đang gửi thì file cũ có thể đã bị xóa hẳn).
+          ...(placement.target
+            ? [
+                guard(
+                  sql`SELECT 1 FROM rounds r, json_each(r.files) f
+                      WHERE r.id = ${round.id} AND f.value = ${placement.target.fileId}`,
+                  "file"
+                ),
+              ]
+            : []),
           bumpSeq(deliverable.id),
           sql`${Feedback.insert({
             id: newId(),
@@ -550,9 +574,16 @@ export async function createByGuest(guest, input) {
             updatedAt: at,
           })} RETURNING *`,
         ],
-        done: (results) => fromRow(results[2].rows[0]),
+        // Câu INSERT luôn đứng cuối lô (số guard phía trước thay đổi theo từng bài).
+        done: (results) => fromRow(results[results.length - 1].rows[0]),
       }),
-      { errors: { closed: ROUND_CLOSED } }
+      {
+        errors: {
+          closed: ROUND_CLOSED,
+          limit: TOO_MANY,
+          file: FILE_REPLACED,
+        },
+      }
     );
     return { feedback: toGuestView(created, viewer), created: true };
   } catch (err) {
@@ -708,7 +739,7 @@ export async function replyByGuest(guest, id, input) {
       body: input.body,
     })
   );
-  if (changes === 0) throw TOO_LONG();
+  if (changes === 0) throw await replyRejected(fb.id);
   notifyFeedback({
     deliverableId: fb.deliverable,
     feedbackId: fb.id,
@@ -757,6 +788,11 @@ export async function verdictByGuest(guest, id, input) {
   await transact(
     async () => ({
       statements: [
+        // Vòng vừa khép (người khác bấm gửi hay duyệt) giữa lúc kiểm và lúc ghi: từ chối như mọi thao tác ghi của khách.
+        guard(
+          sql`SELECT 1 FROM rounds WHERE id = ${guest.round.id} AND status = 'open'`,
+          "closed"
+        ),
         guard(
           sql`SELECT 1 FROM feedback WHERE id = ${fb.id} AND status = 'done'`,
           "stale"
@@ -790,7 +826,7 @@ export async function verdictByGuest(guest, id, input) {
         }),
       ],
     }),
-    { errors: { stale: STALE } }
+    { errors: { stale: STALE, closed: ROUND_CLOSED } }
   );
   notifyFeedback({
     deliverableId: fb.deliverable,
@@ -979,41 +1015,54 @@ export async function createByMember(actor, deliverableId, input) {
   const id = newId();
   const at = now();
   try {
-    await transact(async () => ({
-      statements: [
-        bumpSeq(d.id),
-        Feedback.insert({
-          id,
-          org: actor.orgId,
-          order: d.order,
-          deliverable: d.id,
-          round: round.id,
-          roundNumber: round.number,
-          seq: currentSeq(d.id),
-          clientId: input.clientId,
-          authorKind: "member",
-          authorName: actor.name,
-          authorMember: actor.memberId,
-          visibility: input.visibility,
-          body: input.body,
-          ...placementColumns(placement),
-          status: "open",
-          submittedAt: at,
-          createdAt: at,
-          updatedAt: at,
-        }),
-        auditStatement({
-          actor,
-          action: "feedback.create",
-          entityType: "feedback",
-          entityId: id,
-          orderId: d.order,
-          deliverableId: d.id,
-          // Số thứ tự chỉ có lúc lô chạy: lấy bằng truy vấn con.
-          after: sql`json_object('deliverable', ${d.id}, 'seq', ${currentSeq(d.id)}, 'visibility', ${input.visibility})`,
-        }),
-      ],
-    }));
+    await transact(
+      async () => ({
+        statements: [
+          // File được ghim phải còn thuộc sản phẩm lúc ghi (đồng nghiệp vừa gỡ hẳn file đó thì bài sẽ trỏ vào chỗ trống).
+          ...(placement.target
+            ? [
+                guard(
+                  sql`SELECT 1 FROM deliverables d, json_each(d.files) f
+                      WHERE d.id = ${d.id} AND f.value ->> 'id' = ${placement.target.fileId}`,
+                  "file"
+                ),
+              ]
+            : []),
+          bumpSeq(d.id),
+          Feedback.insert({
+            id,
+            org: actor.orgId,
+            order: d.order,
+            deliverable: d.id,
+            round: round.id,
+            roundNumber: round.number,
+            seq: currentSeq(d.id),
+            clientId: input.clientId,
+            authorKind: "member",
+            authorName: actor.name,
+            authorMember: actor.memberId,
+            visibility: input.visibility,
+            body: input.body,
+            ...placementColumns(placement),
+            status: "open",
+            submittedAt: at,
+            createdAt: at,
+            updatedAt: at,
+          }),
+          auditStatement({
+            actor,
+            action: "feedback.create",
+            entityType: "feedback",
+            entityId: id,
+            orderId: d.order,
+            deliverableId: d.id,
+            // Số thứ tự chỉ có lúc lô chạy: lấy bằng truy vấn con.
+            after: sql`json_object('deliverable', ${d.id}, 'seq', ${currentSeq(d.id)}, 'visibility', ${input.visibility})`,
+          }),
+        ],
+      }),
+      { errors: { file: FILE_REPLACED } }
+    );
   } catch (err) {
     // Hai request cùng clientId tới gần như cùng lúc: bên thua lấy bài bên thắng vừa tạo.
     if (uniqueViolationOf(err)) {
@@ -1153,7 +1202,7 @@ export async function replyByMember(actor, id, input) {
       body: input.body,
     })
   );
-  if (changes === 0) throw TOO_LONG();
+  if (changes === 0) throw await replyRejected(fb.id);
   notifyFeedback({
     deliverableId: fb.deliverable,
     feedbackId: fb.id,
