@@ -108,6 +108,13 @@ Guard nào cho điều gì:
 
 Vì trạng thái đổi luôn kèm `version + 1` trên cùng bản ghi, guard theo `version` đã bao luôn "trạng thái chưa đổi" của chính bản ghi đó. Chỉ cần guard thêm cho **bản ghi khác** mà quyết định dựa vào.
 
+**Ngoại lệ phải nhớ: team của đơn không nằm trên bản ghi đơn.** Đổi vai trò một thành viên (`updateMember`) hay khôi phục chủ hệ thống (`ensureOwner`) sửa bảng `order_members` mà không đổi `orders.version` (giữ như bản cũ: `version` của đơn không đổi khi vai trò của một người đổi, và bộ Postman dựa vào điều đó). Vì vậy lô nào quyết định dựa trên vai trò hay trạng thái của thành viên (`createOrder`, `setOrderMembers`, giao việc) phải guard chính các giá trị đó: so `(id, role, status)` của mọi thành viên liên quan với thứ `plan` đã đọc (`assignableGuard` trong `orderService.js`, `assignableQuery` trong `feedbackService.js`).
+
+Hai luật cho guard (ghi cả ở đầu hàm `transact`):
+
+- Guard dựa trên dữ liệu đọc **ngoài** `plan` (ngữ cảnh của khách do `guestMiddleware` nạp) phải có nhãn nằm trong `errors`. Chạy lại `plan` không đọc lại dữ liệu đó, nên guard không nhãn chỉ chạy lại vô ích rồi ra 409 chung.
+- Điều kiện SQL của guard không nhãn phải trùng câu kiểm JavaScript trong `plan`. Lệch nhau thì `plan` luôn cho qua còn guard luôn sai: 409 vĩnh viễn, mà frontend tự lưu lại khi gặp 409.
+
 Ba mẫu hay gặp (đều đã thử trên D1 cục bộ):
 
 ```js
@@ -127,7 +134,9 @@ sql`UPDATE feedback SET status = 'open', ... WHERE deliverable_id = ${d.id} AND 
 
 Luật phải nhớ:
 
-- **Lời gọi ra ngoài (kho file) đặt trước `transact`**, không đặt trong `plan`: `plan` có thể chạy lại. Kết quả của kho giữ ở biến ngoài.
+- **Lời gọi ra ngoài (kho file) đặt trước `transact`**, không đặt trong `plan`: `plan` có thể chạy lại. Kết quả của kho giữ ở biến ngoài. Làm theo ba pha: (1) đọc sơ bộ và kiểm đủ như bản cũ (404, quyền, `version`, luật của sản phẩm), chưa đụng kho; (2) gọi kho; (3) `transact` với `plan` đọc lại và kiểm lại. Không có pha (1) thì request sai quyền hay sai `version` vẫn làm kho chuyển file rồi mới bị từ chối. Xem `attachFile` trong `deliverableService.js`.
+- **Mongoose tự làm, SQL thì không**: sinh `id` và `createdAt` cho phần tử lồng (file, trả lời, trang của vòng), `_id` cho người liên hệ mới (giữ `_id` cũ khi sửa), `capturedAt` mặc định là lúc ghi, `isPrimary` mặc định `false`. Tự đặt khi dựng JSON.
+- **`updated_at` của bản ghi cha**: bộ đếm số thứ tự góp ý (mẫu A) **không** đổi `updated_at` của sản phẩm (bản cũ có đổi; đây là thay đổi có chủ ý, vì `updatedAt` của sản phẩm nhảy mỗi khi khách lưu một nháp là vô nghĩa với người xem). Kiểm khóa nhúng đúng (`bridge_seen_at`) và lượt mở link (`open_count`) vẫn đặt `updated_at` như bản cũ.
 - **Báo trực tiếp (`notifyFeedback`, `disconnect...`) gọi sau khi `transact` xong.**
 - Một lô là một lượt đi về tới D1 và tính là **một** truy vấn trong trần 50 truy vấn mỗi request. Nhiều câu đọc độc lập gom bằng `readAll([...])`.
 - Mỗi câu tối đa 100 tham số: danh sách dùng `sql.list(mảng)`; chèn nhiều dòng dùng `INSERT ... SELECT ... FROM json_each(${JSON.stringify(dòng)})`.
@@ -507,6 +516,11 @@ export async function activateMember(actor, id, input) {
 Chèn bản ghi mới: `Member.insert({ id: newId(), org: actor.orgId, ..., searchText: toSearchText(name, email), createdAt: at, updatedAt: at })` với `const at = now()`.
 
 Mẫu thật đang chạy: `src/services/authService.js` (đọc một truy vấn, `transact` có guard, `DELETE ... RETURNING`, chèn có `ON CONFLICT`), `src/controllers/authController.js`, `src/routes/authRoutes.js`.
+
+### Khác nhỏ đã biết so với bản cũ
+
+- `member.leadOrders` (ở `GET /auth/me`): bản cũ sắp theo lúc được chọn làm leader, bản mới theo lúc tham gia đơn (`created_at` của dòng `order_members`, rồi `order_id`). Tập giá trị như nhau; chỉ lệch thứ tự khi một người làm leader ở nhiều đơn theo thứ tự khác thứ tự tham gia.
+- Mọi câu `ORDER BY` trên cột không duy nhất có thêm `id` làm cột phá hòa (`ORDER BY name, id`), để hai lần gọi cho cùng một thứ tự.
 
 ### Bẫy khi chép code cũ
 
