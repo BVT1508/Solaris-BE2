@@ -1,0 +1,2 @@
+# Chuẩn hóa xuống dòng LF cho mọi file văn bản, khớp với Prettier (endOfLine: lf).
+* text=auto eol=lf

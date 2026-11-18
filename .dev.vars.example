@@ -1,0 +1,29 @@
+# Sao chép thành .dev.vars rồi điền. KHÔNG commit .dev.vars. Chỉ dùng cho `wrangler dev` trên máy này.
+# Ở bản deploy: giá trị thường nằm trong "vars" của wrangler.jsonc, khóa bí mật đặt bằng `wrangler secret put <TÊN>`.
+
+# development: bật đăng nhập dev (chỉ nhận từ chính máy này) và trả thêm `detail` ở lỗi 500.
+ENVIRONMENT=development
+
+# Bắt buộc. Email Google của chủ hệ thống: luôn là quản trị viên, không ai hạ quyền hay khóa được.
+OWNER_EMAIL=
+
+# Origin của frontend được phép gọi API (cách nhau bằng dấu phẩy). Origin đầu tiên là nơi chuyển về sau khi
+# đăng nhập Google và là gốc của link chia sẻ. Bản deploy một Worker: đặt đúng địa chỉ https://<tên>.workers.dev.
+CLIENT_ORIGINS=http://localhost:5173
+
+# Phiên đăng nhập sống bao nhiêu giờ.
+SESSION_HOURS=12
+
+# Đăng nhập Google (Google Cloud Console > Credentials > OAuth client ID, loại Web). Bỏ trống khi dev: dùng đăng nhập dev.
+# Authorized redirect URI phải là: <API_PUBLIC_URL>/api/v1/auth/google/callback
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Kho file. Dạng cloudinary://<api_key>:<api_secret>@<cloud_name>. Chưa điền thì API file trả 503, phần còn lại vẫn chạy.
+CLOUDINARY_URL=
+
+# Địa chỉ trình duyệt dùng để tới API. Để trống: lấy origin đầu tiên của CLIENT_ORIGINS (dev đi qua Vite proxy).
+API_PUBLIC_URL=
+
+# debug, info, warn, error, silent
+LOG_LEVEL=info

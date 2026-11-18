@@ -9,3 +9,7 @@ node_modules/
 .DS_Store
 postman/
 .postman/
+!.dev.vars.example
+
+# Bản build của frontend, chép vào bằng `npm run sync-frontend`
+frontend-dist/

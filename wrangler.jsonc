@@ -1,0 +1,88 @@
+// Cấu hình Worker của Solaris. Một Worker cho tất cả: API (/api/*), kết nối trực tiếp (Durable Object)
+// và bản build của frontend (static assets). Xem docs/kien-truc.md mục 9.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "solaris",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  // nodejs_compat: dùng node:crypto (băm đồng bộ) và Buffer.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Máy dev: cổng 4000 và 127.0.0.1 như backend cũ, để environment "Solaris local" của Postman dùng lại được.
+  "dev": { "port": 4000, "ip": "127.0.0.1" },
+
+  // Bản build của frontend (scripts/sync-frontend.mjs chép từ "../Solaris FE/dist"). Đường dẫn /api/* luôn vào Worker;
+  // đường dẫn khác tìm file tĩnh, không có thì trả index.html để React Router xử lý.
+  "assets": {
+    "directory": "./frontend-dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+
+  // database_id dưới đây là mã giữ chỗ, đủ cho D1 cục bộ. Ngày deploy: `wrangler d1 create solaris` rồi dán mã thật vào.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "solaris",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+
+  // Một Durable Object giữ mọi WebSocket của màn góp ý (docs/kien-truc.md mục 5). Gói miễn phí chỉ có loại SQLite.
+  "durable_objects": {
+    "bindings": [{ "name": "REALTIME", "class_name": "RealtimeHub" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RealtimeHub"] }],
+
+  // Việc định kỳ (src/jobs/index.js chọn việc theo biểu thức cron). Giờ UTC.
+  "triggers": {
+    "crons": [
+      // Mỗi giờ: phiên và state hết hạn, bộ đếm hạn mức cũ, thùng rác kho file.
+      "23 * * * *",
+      // Mỗi 6 giờ: file tạm quá 1 ngày trên kho, bản cũ của đơn đã bàn giao quá 30 ngày.
+      "41 */6 * * *",
+    ],
+  },
+
+  // Giới hạn tần suất theo IP (docs/kien-truc.md mục 6). period chỉ nhận 10 hoặc 60 giây.
+  "ratelimits": [
+    {
+      "name": "API_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 600, "period": 60 },
+    },
+    {
+      "name": "AUTH_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 },
+    },
+    {
+      "name": "PUBLIC_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 120, "period": 60 },
+    },
+    {
+      "name": "GUEST_WRITE_LIMITER",
+      "namespace_id": "1004",
+      "simple": { "limit": 60, "period": 60 },
+    },
+    {
+      "name": "SOCKET_LIMITER",
+      "namespace_id": "1005",
+      "simple": { "limit": 120, "period": 60 },
+    },
+  ],
+
+  // Giá trị không bí mật, đi theo bản deploy. Máy dev ghi đè bằng .dev.vars (xem .dev.vars.example).
+  // Khóa bí mật (OWNER_EMAIL không bí mật nhưng riêng từng nơi, GOOGLE_CLIENT_SECRET, CLOUDINARY_URL) đặt bằng `wrangler secret put`.
+  "vars": {
+    // "production" là mặc định an toàn: đăng nhập dev chỉ bật khi .dev.vars đặt ENVIRONMENT=development.
+    "ENVIRONMENT": "production",
+    "SESSION_HOURS": "12",
+    "LOG_LEVEL": "info",
+  },
+
+  "observability": { "enabled": true },
+}
