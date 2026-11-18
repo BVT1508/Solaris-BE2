@@ -61,12 +61,12 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 - Đẩy file thẳng lên Cloudinary từ kịch bản đôi khi hết giờ kết nối; chạy lại là qua.
 - Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
 
-**Tin của phiên điều phối chưa làm xong:** hai việc ưu tiên thấp của sáng 19/11 ở trên (xem mục "Đợt 19/11" để biết đã tới đâu). Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+**Tin của phiên điều phối chưa làm xong:** không còn; hai việc của sáng 19/11 đã xong (mục "Đợt 19/11"). Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
 
 ## Đợt 19/11
 
-- [ ] Lỗi đóng WebSocket mã 4000 với kết nối chưa gửi lệnh nào: chưa xem.
-- [ ] `README.md`: chưa viết.
+- [x] **Lỗi đóng WebSocket mã 4000 với kết nối chưa gửi lệnh nào: đã xem, không phải lỗi của `realtimeHub.js`, không sửa.** Tái hiện được bằng `thu-ngat-ket-noi.js` ở cổng 4001. Dò bằng socket thô (`qa-scripts/cf/x_do_dong_ws.mjs`): khung đóng mã 4000 tới client ở mọi trường hợp; client trả lời; `webSocketClose` ở hub chạy với mã 4000, `wasClean` đúng, `readyState` 3 ở cả bốn trường hợp. Khác nhau chỉ ở mức TCP: kết nối chưa gửi khung nào thì tầng `wrangler dev` không ngắt TCP sau bắt tay đóng (chờ 5 giây vẫn mở); đã gửi một khung, kể cả `ping` (thứ runtime tự trả, không vào code của hub), thì TCP ngắt sau 20 ms. Vì `ping` cũng chữa được nên nguyên nhân không nằm ở code của hub; tài liệu Cloudflare cũng ghi không cần gọi `close()` trong `webSocketClose` khi server đã đóng chiều gửi. Trình duyệt tự ngắt sau bắt tay đóng nên không bị; WebSocket của Node 22 chờ TCP nên kẹt. Cách tránh cho kịch bản Node: gửi `ping` ngay sau `ready`. Chưa thử trên Cloudflare thật. Đã ghi vào `docs/hop-dong-realtime.md` mục 8.
+- [x] `README.md` ở gốc repo: hệ thống là gì, chạy máy dev, chấm, deploy (script sinh cấu hình, khóa bí mật, callback Google), giới hạn gói miễn phí và số đo CPU.
 
 ## Trạng thái các gói
 
