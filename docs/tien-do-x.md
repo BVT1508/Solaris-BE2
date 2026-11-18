@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Bàn giao (đọc mục này trước nếu vừa mất context)
 
-Cập nhật lần cuối: 18/11/2026, gần nửa đêm. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+Cập nhật lần cuối: 19/11/2026, sau nửa đêm. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
 
 **Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
 
@@ -24,17 +24,23 @@ Mọi điểm của `docs/soat-thiet-ke.md` giao cho X đã xử lý (bảng ở
 
 **Đang dở: giảm thời gian CPU** (phiên điều phối giao tối 18/11, ưu tiên cao). Bối cảnh: bản nền `db3d17d` đã được phiên điều phối deploy lên Cloudflare thật, Worker `app`, địa chỉ `https://app.solaris-fbs.workers.dev` (tên con là `solaris-fbs`, KHÔNG phải `solaris-feedback`), D1 `solaris` id `c7e83a5a-87eb-417f-9fd2-5a1d05833a11`. Số đo của phiên điều phối (`cpuTime` từ `wrangler tail app --format json`): `/auth/me` không cookie trung vị 1 ms nhưng request đầu của isolate mới 12 tới 19 ms; có cookie giả (một truy vấn D1) trung vị 5 ms, cao nhất 8 ms. Trần gói miễn phí là 10 ms.
 
-Các bước, theo thứ tự (cập nhật 18/11, gần nửa đêm):
+**Số đo thật trên Cloudflare** (phiên điều phối đo bản `5ac2071` bằng bộ đo của X, `cpuTime` ms; phiên điều phối lo việc deploy, X chỉ dựng sẵn rồi nhắn):
 
-1. [x] Sửa địa chỉ deploy trong repo (`d8e0943`).
-2. [x] Tách cấu hình deploy: `node scripts/make-deploy-config.mjs --d1 <id> [--origin <url>]` sinh `wrangler.deploy.jsonc` (không commit), deploy bằng `npx wrangler deploy -c wrangler.deploy.jsonc`. `database_id` giữ chỗ trong `wrangler.jsonc` để nguyên (`d8e0943`).
-3. [ ] Deploy bản đo: **BỊ CHẶN.** Lệnh `wrangler deploy` của phiên X bị lớp kiểm quyền từ chối (không tìm đường vòng). Bộ đo đã dựng sẵn và chạy thử khô ở `D:\Work\New folder\qa-scripts\cf\x-do-cpu\` (`README.md` có đủ lệnh): cần phiên điều phối hoặc chủ dự án deploy, chạy `wrangler tail`, rồi `node x_do_cpu.mjs gui ...` và `doc ...`.
-4. [x] Giảm phần đo được bằng Node (`f89a025`): dựng bảng định tuyến lúc nạp module (request đầu 7,8 ms xuống 2,8 ms trên máy dev), một app Hono, `ensureOwner` chỉ ở đường đăng nhập và cron mỗi giờ. Postman sau khi sửa: 406/406, 1377/1377 (lượt `x-cpu-1`); kịch bản 68 phép vẫn đạt.
-5. [ ] Khi có số đo từ bản đo: nếu một lượt gọi D1 đắt (vài ms), gom các lượt trong service của X bằng `readAll`. Chỗ nên gom trước: `getDeliverable` (tìm sản phẩm rồi nạp vòng: 2 lượt), `listDeliverables` (2), danh sách góp ý của team (tìm sản phẩm rồi liệt kê: 2), `createByGuest` (tìm bài cũ, đếm, lô ghi: 3, cộng 1 của ngữ cảnh khách). Báo phiên Y làm tương tự.
-6. [x] Số đo và luật đã ghi vào `docs/kien-truc.md` mục 10 ("Số đo CPU") và mục 11 ("Luật viết code để giữ CPU dưới 10 ms"). Cần bổ sung số đo thật sau bước 3.
-7. [ ] Sau khi đo xong: deploy lại bản sạch (`bash build-deploy.sh HEAD 0`), không để route chẩn đoán trên bản deploy.
+- Đường thật: `/auth/me` không cookie trung vị 1, cao nhất 2; cookie giả trung vị 2, p90 5, cao nhất 10 (bản cũ trung vị 5); 404 qua app 0 tới 3; `index.html` 0 tới 1.
+- D1: một truy vấn 0 tới 1; ba nối tiếp 1 tới 3; sáu nối tiếp 2 tới 4; lô ba câu 0 tới 2; lô sáu câu 1 tới 2. Một lượt đi về khoảng 0,5 ms. Đọc 500 dòng nhỏ: 1 tới 2.
+- Binding: Rate Limiting 0 tới 1 cho cả 5 lời gọi; Durable Object 1 ms cho 3 lời gọi.
+- Thuần JavaScript (1.000 lần): băm `node:crypto` 9; `crypto.subtle` 5; sinh id 1; ký URL 17. zod body thường 0,1 ms mỗi lần; **body có nét vẽ 2.000 điểm 5 ms mỗi lần**.
+- **Danh sách lớn: dựng 500 object 12 tới 21 ms; dựng rồi in JSON 500 bài 18 tới 41 ms.** Máy của Cloudflare chậm hơn máy dev khoảng 3 tới 4 lần ở phần JavaScript thuần.
+- Kết luận: request thường 2 tới 5 ms, ổn. Chỗ vượt 10 ms: danh sách vài trăm góp ý, và zod trên payload lớn.
 
-File dùng chung đã sửa trong việc này: `src/app.js`, `src/index.js`, `src/routes/authRoutes.js`, `src/jobs/index.js`, `src/controllers/authController.js`, `wrangler.jsonc`, `.gitignore`, `scripts/make-deploy-config.mjs`, `docs/kien-truc.md`, `docs/tien-do.md`. Phiên Y không phải đổi gì; chỉ cần đọc mục 11 mới về CPU.
+Các bước, theo thứ tự (phiên điều phối giao lúc nửa đêm 18/11):
+
+1. [x] Địa chỉ deploy, tách cấu hình deploy (`d8e0943`), dựng bảng định tuyến lúc nạp module và `ensureOwner` chỉ ở đường đăng nhập (`f89a025`).
+2. [ ] **Giảm CPU danh sách góp ý** (team: `listForTeam`, `listForOrder`, `listMine`; khách: `listForGuest`), không đổi hợp đồng API. Hướng đã chọn: để SQLite dựng sẵn JSON của từng bài (`json_object` trong câu SELECT), Worker chỉ nối chuỗi, không `JSON.parse` rồi `stringify`. Muốn vậy `mark`, `anchor` lưu sẵn ở dạng trả ra (chuẩn hóa lúc ghi bằng `toMark`, `toAnchor`), `replies` lưu ở dạng của team cộng `deviceHash` (khóa `authorMemberId` thay cho `authorMember`). Ảnh chụp cần ký URL bằng khóa bí mật nên vẫn làm ở JavaScript: câu SELECT đặt `"screenshot":null` ở cuối object và trả cột `screenshot` thô, JavaScript ghép phần đã ký vào. Controller trả chuỗi đã dựng bằng `c.body`. Bản một bài (`teamViewById`, `guestViewById`) dùng chung câu SELECT đó rồi `JSON.parse` một dòng. Đo bằng Node với 50, 100, 200, 500 bài trước và sau.
+3. [ ] **Payload lớn**: nét vẽ 2.000 điểm (`markSchema` trong `feedbackValidator.js`, của X) kiểm bằng vòng lặp tay thay cho `z.array(z.tuple(...))`, giữ nguyên lời báo. Đề xuất cho phiên Y dùng cùng cách cho ghim của `PUT .../rounds/current/pages` (30 trang x 300 ghim).
+4. [ ] **Kích riêng từng việc định kỳ trên máy dev** (chỉ khi `ENVIRONMENT=development`): phiên Y cần thử `purgeDeliveredVersions` mà không chạy `purgeStalePending` (xóa file tạm trên Cloudinary thật). Làm trong `src/jobs/index.js`, rồi nêu cách gọi trong báo cáo để phiên điều phối báo phiên Y.
+5. [ ] **Sự kiện trực tiếp của gói X qua WebSocket thật**: tạo, trả lời, đổi trạng thái, xác nhận, xóa, loại trừ theo `X-Socket-Id`, khách không nhận sự kiện nội bộ đã có trong `x_kiem_gop_y_team.mjs` (68 phép). Còn thiếu: sự kiện `status` khi ảnh đính sau vào bài đã gửi (thêm vào `x_kiem_kho_that.mjs`).
+6. [ ] Ghi bảng số đo thật vào `docs/kien-truc.md` mục 10; sửa luật ở mục 11 theo số thật (gom truy vấn không còn là ưu tiên số một; ưu tiên là kích thước danh sách và payload lớn). Chấm lại cả bộ Postman, commit từng mục, cập nhật mục này.
 
 **Lệnh và cổng của tôi.** Server thử: `npx wrangler dev --port 4001 --persist-to .wrangler/state-x` (cổng 4000 và `.wrangler/state` để chấm tổng; 4002 và `state-y` của phiên Y). Làm trống: `powershell -ExecutionPolicy Bypass -File "D:\Work\New folder\qa-scripts\cf\x_server.ps1" reset`. Chấm: trong `qa-scripts\cf`, `node chay-postman.js --base-url http://127.0.0.1:4001/api/v1 [-t <thư mục>] --nhan x-<nhãn>`. Kịch bản riêng: `x_kiem_gop_y_team.mjs` (68 phép), `x_kiem_kho_that.mjs` (18, Cloudinary thật), `x_doi_chieu_cloudinary.mjs` (30), `x_do_rename_cloudinary.mjs`. Commit: `git add <file mới>` rồi `git commit -m "<lời>" -- <đường dẫn>` để không cuốn theo file phiên Y đang sửa.
 
@@ -47,7 +53,7 @@ File dùng chung đã sửa trong việc này: `src/app.js`, `src/index.js`, `sr
 - Đẩy file thẳng lên Cloudinary từ kịch bản đôi khi hết giờ kết nối; chạy lại là qua.
 - Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
 
-**Tin của phiên điều phối chưa làm xong:** chỉ còn việc giảm CPU ở trên. Việc còn mở cho phiên Y (đã ghi ở mục "Điểm lệch"): `adoptPageShot` nên đổi sang `storage.adoptPending`.
+**Tin của phiên điều phối chưa làm xong:** các bước 2 tới 6 ở trên. Việc deploy do phiên điều phối làm: bản đo mới thì dựng bằng `bash "D:\\Work\\New folder\\qa-scripts\\cf\\x-do-cpu\\build-deploy.sh" HEAD 1` rồi nhắn. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
 
 ## Trạng thái các gói
 
