@@ -9,17 +9,17 @@ Viết ngày 18/11/2026 bởi phiên kiến trúc, cho các phiên code đọc v
 ```
 Trình duyệt ──► Cloudflare (một Worker tên "solaris", địa chỉ *.workers.dev)
                  │
-                 ├─ đường dẫn KHÔNG bắt đầu bằng /api/  → static assets (bản build của Solaris FE, thư mục frontend-dist)
-                 │                                         không khớp file nào thì trả index.html (React Router)
+                 ├─ khớp một file tĩnh (không phải /api/*)  → static assets (bản build của Solaris FE, thư mục frontend-dist)
                  │
-                 └─ /api/*  → Worker (src/index.js)
+                 └─ /api/*, và mọi đường dẫn không khớp file nào  → Worker (src/index.js)
                       ├─ GET /api/v1/realtime      → nâng cấp WebSocket → Durable Object RealtimeHub (một object, tên "hub")
+                      ├─ đường dẫn của ứng dụng    → index.html (React Router)
                       └─ còn lại                   → app Hono (src/app.js) → routes → controllers → services → D1
                                                       services gọi ra ngoài bằng fetch: Cloudinary, Google
 Cron Triggers ──► scheduled() trong src/index.js → src/jobs
 ```
 
-- **Một Worker.** File tĩnh do Cloudflare phục vụ trước khi tới Worker (không tốn lượt request của gói miễn phí). Chỉ `/api/*` vào Worker (`run_worker_first` trong `wrangler.jsonc`). Lưu ý: với chế độ SPA, mọi đường dẫn ngoài `/api/*` mà trình duyệt mở trực tiếp đều nhận `index.html`, không bao giờ tới Worker. Route server nào cần trình duyệt mở thẳng (callback của Google) phải nằm dưới `/api/`; hiện đã đúng.
+- **Một Worker**, tên `app` (địa chỉ deploy: `https://app.solaris-feedback.workers.dev`). File tĩnh có thật do Cloudflare phục vụ trước khi tới Worker (không tốn lượt request của gói miễn phí). `/api/*` luôn vào Worker (`run_worker_first`). Đường dẫn không khớp file nào cũng vào Worker: `src/middleware/frontendMiddleware.js` trả `index.html` cho đường dẫn của ứng dụng (GET hoặc HEAD, không có đuôi file, không phải `/api` hay `/socket.io`) và để 404 JSON cho phần còn lại, đúng như backend cũ. **Không dùng chế độ `single-page-application` của Cloudflare**: đã thử, chế độ đó trả `index.html` cho cả file thiếu (một gói JS cũ sau lần deploy), trình duyệt nhận HTML thay cho 404. Cái giá: mỗi lần mở thẳng một trang sâu (`/r/:token`, `/orders/...`) tốn một lượt request của Worker.
 - **Không còn `req`, `res`, `process.env` toàn cục.** Cấu hình và binding lấy qua `import env from "../config/env.js"` và `import { db } from "../db/d1.js"`, dùng được ở mọi file, không phải truyền `c.env` (đã thử: `import { env } from "cloudflare:workers"` có giá trị ngay lúc nạp module).
 - **Worker không giữ bộ nhớ giữa các request.** Biến cấp module chỉ là bộ đệm của một isolate, có thể mất bất cứ lúc nào. Không lưu gì cần đúng vào đó.
 - **Không dùng gói npm cần Node thật.** Phụ thuộc chạy chỉ có `hono` và `zod`. Không có mongoose, cloudinary SDK, google-auth-library, pino, socket.io, pdf-lib, image-size.
@@ -210,11 +210,13 @@ Hợp đồng phía trình duyệt: `docs/hop-dong-realtime.md`. Phần dưới 
 
 - **Xác thực lúc mở** do Worker làm (`src/realtime/connect.js`), kết nối hỏng không chạm tới object: kiểm Origin (như Socket.IO cũ: có Origin thì phải nằm trong danh sách), giới hạn 120 lần mở mỗi phút mỗi IP (`SOCKET_LIMITER`), rồi cookie phiên (thành viên) hoặc `?token=` (khách: link tồn tại, chưa thu hồi, sản phẩm chưa lưu trữ). Đạt thì chuyển yêu cầu nâng cấp vào object kèm danh tính; object chỉ giữ **băm** của token phiên.
 - **Kiểm lại phiên**: mỗi lệnh `deliverable:watch` đọc lại phiên và quyền `feedback.read` của đơn (như cũ); alarm của object 10 phút một lần kiểm mọi phiên đang nối bằng một truy vấn, phiên hết hạn hoặc tài khoản bị khóa thì đóng với mã 4401.
+- **Có `?token=` thì luôn là khách**, kể cả khi trình duyệt gửi kèm cookie của một thành viên đang đăng nhập (trang `/r/:token` cùng origin nên cookie tự đi theo).
+- **Lệnh của một kết nối xử lý lần lượt theo thứ tự gửi** (hàng chờ trong object): xin theo dõi phải hỏi database còn thôi theo dõi thì không, nên không xếp hàng thì chuỗi "theo dõi, thôi, theo dõi" của StrictMode hay "theo dõi rồi thôi ngay" kết thúc sai trạng thái.
 - **Giới hạn lệnh**: 40 lệnh `deliverable:watch` mỗi 10 giây mỗi kết nối; tin dài quá 1.024 ký tự bị bỏ.
 - **Ngắt chủ động** (gọi sau khi lô ghi xong): `disconnectMember(id)` khi đăng xuất, bị khóa, đổi vai trò, bị gỡ khỏi đơn; `disconnectLink(id)` khi thu hồi link; `disconnectGuestsOf(id)` khi lưu trữ sản phẩm. Kết nối đóng với mã 4000.
 - **Phát sự kiện**: `notifyFeedback({ deliverableId, feedbackId, kind, visibility, actor })` như cũ. Nội dung `feedback:event` giữ nguyên; phía khách chỉ nhận khi `visibility` là `customer` và `actor` chỉ còn `kind`. Header `X-Socket-Id` giữ nguyên nghĩa: `protect` (và `resolveGuest` của gói khách) gắn `actor.socketId = socketIdOf(c)`, kết nối đó không nhận lại sự kiện do chính nó gây ra.
 - Mọi lời gọi sang object chạy **sau khi đã trả lời** (`runAfterResponse`) và nuốt lỗi.
-- **Đã thử** (kịch bản tạm, kết nối WebSocket thật vào `wrangler dev`): không cookie nhận lỗi 401 và mã đóng 4401; Origin lạ bị từ chối lúc bắt tay; token link không tồn tại nhận 404 và mã 4404; thành viên nhận `ready` kèm `socketId` 20 ký tự, `ping` ra `pong`, xin theo dõi sản phẩm không tồn tại bị từ chối, id sai dạng bị từ chối, `unwatch` trả ok; đăng xuất thì kết nối đóng với mã 4000; nối lại bằng cookie đã hủy nhận 4401.
+- **Đã thử** (kịch bản tạm, kết nối WebSocket thật vào `wrangler dev`): năm lệnh gửi liền nhau nhận `ack` đúng thứ tự gửi; vừa có cookie thành viên vừa có token lạ thì bị coi là khách và nhận 4404; không cookie nhận lỗi 401 và mã đóng 4401; Origin lạ bị từ chối lúc bắt tay; token link không tồn tại nhận 404 và mã 4404; thành viên nhận `ready` kèm `socketId` 20 ký tự, `ping` ra `pong`, xin theo dõi sản phẩm không tồn tại bị từ chối, id sai dạng bị từ chối, `unwatch` trả ok; đăng xuất thì kết nối đóng với mã 4000; nối lại bằng cookie đã hủy nhận 4401.
 - **Chưa thử**: khách nối bằng token thật, phát `feedback:event` tới team và khách, loại trừ theo `X-Socket-Id`, alarm kiểm phiên, object ngủ rồi dậy (máy dev không bao giờ cho object ngủ nên lỗi ngủ đông chỉ lộ trên Cloudflare thật). Gói Y3 và X3 thử khi có link và góp ý.
 
 ## 6. Giới hạn tần suất
@@ -308,14 +310,24 @@ Bỏ hẳn: `PORT`, `HOST`, `MONGODB_*`, `FRONTEND_DIST`, `STORAGE_DRIVER`, `R2_
 
 **Log**: `logger.info({ ... }, "lời")` ra JSON một dòng (Workers Logs khi deploy, màn hình `wrangler dev` khi dev). Mỗi request một dòng: phương thức, đường dẫn đã che token của link, mã trả về, mili giây. Không ghi cookie, token, email, nội dung góp ý. `console.log` bị ESLint chặn ngoài `logger.js`.
 
-**Frontend và trang demo**: `npm run sync-frontend` chép `../Solaris FE/dist` (đã gồm `bridge.js` và `demo-site/`) vào `frontend-dist/` và sinh file `_headers` (thư mục `assets/` giữ lâu; `bridge.js` cho site khác nạp). File tĩnh không mang CSP của API, nên trang review nhúng được site của khách. Khi dev vẫn chạy Vite ở 5173 và proxy `/api` sang 4000 như cũ; **proxy `/api` phải bật `ws: true`** cho kết nối trực tiếp, và bỏ mục `/socket.io`. Chưa thử phục vụ bản build thật qua Worker (mới có trang giữ chỗ).
+**Frontend và trang demo**: `npm run sync-frontend` chép `../Solaris FE/dist` (đã gồm `bridge.js` và `demo-site/`) vào `frontend-dist/` và sinh file `_headers`. Khi dev vẫn chạy Vite ở 5173 và proxy `/api` sang 4000 như cũ; **proxy `/api` phải bật `ws: true`** cho kết nối trực tiếp, và bỏ mục `/socket.io`. Đã thử với bản build hiện có của frontend (đối chiếu `Solaris FE/docs/fe-dung-api.md` mục 4.4):
+
+| Đường dẫn                                                   | Kết quả                                                                                                   |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `/`, `/login?error=...`, `/orders/abc`, `/r/<token>`        | 200 `index.html`, `Cache-Control: public, max-age=0, must-revalidate`, không có CSP hay `X-Frame-Options` |
+| `/bridge.js`                                                | 200, luôn hỏi lại (không cache dài), `Cross-Origin-Resource-Policy: cross-origin`                         |
+| `/assets/<file có mã băm>` (gồm thư viện chụp ảnh)          | 200, `max-age=31536000, immutable`, `Cross-Origin-Resource-Policy: cross-origin`                          |
+| `/assets/khong-co.js`, `/socket.io/...`, `POST /orders/abc` | 404 JSON, không phải `index.html`                                                                         |
+| `/demo-site/`                                               | 200 trang demo. `/demo-site/index.html?key=...` chuyển hướng 307 sang `/demo-site/?key=...` (giữ query)   |
+
+Origin của `bridge.js`, của thư viện chụp ảnh và của trang review là một: `embedSnippet` và link chia sẻ dựng từ `env.FRONTEND_URL` (origin đầu của `CLIENT_ORIGINS`), bản deploy đặt đúng bằng địa chỉ của Worker. Chưa thử trên trình duyệt thật (nhúng site của khách, chụp ảnh).
 
 ## 10. Giới hạn gói miễn phí
 
 | Giới hạn                                                                                          | Ảnh hưởng                                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 10 ms CPU mỗi request và mỗi lượt cron (thời gian chờ D1, fetch không tính; **máy dev không áp**) | Rủi ro lớn nhất, xem dưới.                                                                                                                                                    |
-| 100.000 request Worker mỗi ngày                                                                   | Chỉ `/api/*` tính; file tĩnh không tính. Hết thì `/api/*` trả 429 tới 0 giờ UTC.                                                                                              |
+| 100.000 request Worker mỗi ngày                                                                   | `/api/*` và mỗi lần mở thẳng một trang sâu (fallback `index.html`) tính; file tĩnh có thật không tính. Hết thì `/api/*` trả 429 tới 0 giờ UTC.                                |
 | 50 lời gọi ra ngoài mỗi request                                                                   | Kho file: xem mục 8.                                                                                                                                                          |
 | D1: 50 truy vấn mỗi request (một lô tính là một)                                                  | Đường khách mở link cũ đã về 8 lệnh. Gom đọc bằng `readAll`.                                                                                                                  |
 | D1: 100.000 dòng ghi, 5 triệu dòng đọc mỗi ngày                                                   | Mỗi cột có chỉ mục tính thêm một dòng ghi. Tránh câu quét cả bảng: mọi WHERE phải dùng được chỉ mục trong `0001_init.sql`. Vượt thì mọi truy vấn lỗi tới 0 giờ UTC.           |
@@ -506,6 +518,23 @@ Mẫu thật đang chạy: `src/services/authService.js` (đọc một truy vấ
 - `localeCompare(b, "vi")` trong JS (ví dụ `listAssignableMembers`): giữ nguyên trong JS, không đẩy xuống SQL.
 - Câu SELECT cho danh sách đừng lấy cột JSON lớn không dùng (`replies`, `pages`, `files`).
 - Mọi `Date` trả ra: đã là chuỗi ISO. So thời gian trong JS: `new Date(x).getTime()` như cũ vẫn đúng.
+
+### Điều frontend dựa vào, dễ lệch khi viết lại
+
+Rút từ `Solaris FE/docs/fe-dung-api.md` mục 6 (đọc mục 1 của file đó cho nghiệp vụ của gói mình). Mỗi dòng là một điều phải giữ đúng:
+
+- **Token của link** sinh bằng `randomToken(24)`: đúng 32 ký tự `[A-Za-z0-9_-]`. **Khóa nhúng** sinh bằng `randomHex(16)`: đúng 32 ký tự hex thường. Frontend từ chối giá trị khác dạng trước khi gọi API.
+- **Thứ tự hai danh sách vòng ngược nhau**: `GET /deliverables/:id/rounds` mới nhất trước (`ORDER BY number DESC`); `deliverable.versions` mới nhất sau (`ORDER BY number ASC`).
+- **`_id`** (không phải `id`) ở người liên hệ của khách và ở danh sách đăng nhập dev; `_id` của người liên hệ được gửi lên làm `contactId`.
+- **Phong bì**: `results`, `nextCursor`, `truncated` nằm ở đầu body, ngang hàng `data`; dữ liệu trong `data.<tên>`; lỗi chỉ có `status` và `message`.
+- **409 ở các `PATCH` và `PUT` của hộp sửa** (đơn, team của đơn, khách hàng, thành viên, sản phẩm, link) bị frontend hiểu là lệch `version` và tự lưu lại. Không thêm 409 mới ở các đường này ngoài những lời backend cũ đã có.
+- **Không trả 401 cho `/r/:token`** (frontend coi 401 là hết phiên thành viên). Lỗi của khách dùng 400, 403, 404, 409, 410, 429 như cũ.
+- **`DELETE /deliverables/:id/files/:fileId` mang body JSON `{ version }`**; `POST /auth/logout`, `.../rounds/current/refresh`, `/r/:token/submit`, `/r/:token/approve` không có body. `parseBody` đã lo cả hai (đã thử POST không body kèm `Content-Type: application/json`).
+- **`GET /members` trả hết trong một lần**, không phân trang.
+- **Mọi thao tác ghi góp ý trả cả bài** ở đúng dạng của bên gọi (team hoặc khách), kèm `version` mới và `anchor` nguyên vẹn.
+- **`GET /r/:token` đếm một lượt mở mỗi lần gọi**, đúng như backend cũ (frontend gọi lại nhiều lần trong một phiên xem và đã biết điều này); không đổi cách đếm.
+- **`GET /auth/me` phải cho cùng một JSON giữa các lần gọi** (frontend so bằng `JSON.stringify`): `orders` và `leadOrders` đã có thứ tự cố định (`TEAMS_COLUMN` sắp theo `created_at`, `order_id`). Mảng trả ra từ SQL luôn phải có `ORDER BY`.
+- **Mọi id trong API, trong tin realtime và trên địa chỉ trang là cùng một chuỗi** 24 hex chữ thường. Không trả id ở dạng nào khác.
 
 ## 12. Kế hoạch chia việc
 

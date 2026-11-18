@@ -29,13 +29,25 @@ Cập nhật: 18/11/2026 (đêm), sau phiên kiến trúc. File này là điểm
 
 Các nhóm 02 tới 07 và 10 tới 13 (392 request) chưa có API nên chưa chạy.
 
+### Bổ sung sau khi đối chiếu với tài liệu của frontend (18/11/2026, khuya)
+
+Theo lời phiên điều phối, đã đọc `Solaris FE/docs/fe-dung-api.md` mục 2, 3, 4.4 và 6 rồi sửa:
+
+- **Fallback của frontend chuyển về Worker** (`src/middleware/frontendMiddleware.js`): đường dẫn của ứng dụng nhận `index.html`, file thiếu nhận 404, `/api` và `/socket.io` không bao giờ nhận `index.html`. `bridge.js` và mọi file trong `assets/` mang `Cross-Origin-Resource-Policy: cross-origin`; `bridge.js` không cache dài.
+- **Kết nối trực tiếp**: lệnh của một kết nối xử lý đúng thứ tự gửi (chuỗi theo dõi, thôi, theo dõi của StrictMode); có `?token=` thì luôn là khách dù có cookie thành viên.
+- **Tài liệu**: `docs/hop-dong-realtime.md` trả lời đủ mục 3.11 và 3.12 của frontend (vì sao token ở query, ai gửi ping, thứ tự `ack`, cách nối lại sau mã 4000); `docs/kien-truc.md` mục 11 thêm danh sách "Điều frontend dựa vào, dễ lệch khi viết lại".
+- **Cấu hình deploy**: tên Worker là `app`, `CLIENT_ORIGINS` của bản deploy là `https://app.solaris-feedback.workers.dev`; `database_id` vẫn là mã giữ chỗ, điền ở đúng một dòng trong `wrangler.jsonc`.
+- **Lệnh `npm run db:reset`** làm trống D1 cục bộ (xem "Cách chạy và thử").
+
+Không cần sửa gì ở các điểm còn lại của mục 6: id là chuỗi 24 hex ở mọi nơi, `_id` ở danh sách đăng nhập dev, phong bì, `DELETE` có body và `POST` không body, không 401 ở `/r/:token`, `GET /auth/me` ổn định giữa các lần gọi.
+
 ## Chưa thử
 
 - Bất cứ thứ gì trên Cloudflare thật (chưa deploy, chưa đăng nhập `wrangler`): 10 ms CPU, D1 thật, trigger guard trên D1 thật, Rate Limiting binding trên gói miễn phí, Durable Object ngủ đông.
 - Đăng nhập Google tới cùng (mới thử: chuyển sang Google đúng tham số, callback với state lạ và với `error`).
 - Kết nối trực tiếp của khách, phát `feedback:event`, loại trừ theo `X-Socket-Id`, alarm kiểm lại phiên (cần link và góp ý).
 - Cloudinary qua HTTP: mới có thiết kế ở `docs/kien-truc.md` mục 8, chưa có dòng code nào.
-- Phục vụ bản build thật của frontend qua Worker (mới có trang giữ chỗ trong `frontend-dist/`).
+- Bản build của frontend trên trình duyệt thật qua Worker (đã thử bằng curl: trang, `bridge.js`, asset, file thiếu, `demo-site`; xem `docs/kien-truc.md` mục 9). Chưa mở bằng trình duyệt, chưa nhúng site của khách.
 - Vượt trần giới hạn tần suất (chưa bắn đủ số request để nhận 429).
 
 ## Bước kế tiếp
@@ -50,12 +62,15 @@ Bốn câu cần chủ dự án quyết: `docs/kien-truc.md` mục 13 (không ch
 npm install
 copy .dev.vars.example .dev.vars      rồi điền OWNER_EMAIL (máy này đã có .dev.vars, chép từ .env của backend cũ)
 npm run dev                           tự áp migration vào D1 cục bộ rồi chạy wrangler dev ở http://127.0.0.1:4000
+npm run db:reset                      làm trống D1 CỤC BỘ rồi dựng lại bảng (tắt server trước)
+npm run sync-frontend                 chép bản build của Solaris FE vào frontend-dist
 npm run lint
 npm run format
 ```
 
 - D1 cục bộ nằm ở `.wrangler/state/v3/d1` (không commit). Xem dữ liệu: `npx wrangler d1 execute DB --local --command "SELECT id, email, role, status FROM members"`.
-- Muốn database trống lại: tắt server rồi xóa thư mục `.wrangler/state` (chỉ là dữ liệu thử trên máy; hỏi chủ dự án trước nếu trong đó có thứ cần giữ).
+- **Làm trống D1 cục bộ: tắt server rồi chạy `npm run db:reset`**, sau đó `npm run dev`. Lệnh xóa thư mục `.wrangler/state/v3/d1` trên máy và áp lại migration với cờ `--local` viết cứng; không nhận tham số và không có nhánh nào gọi tới D1 thật. Server đang chạy thì lệnh dừng và báo tắt server trước. Chủ hệ thống tự được tạo lại ở request đầu vào `/api/v1/auth`.
+- **Mỗi lần chấm bằng Postman phải bắt đầu từ D1 trống** (`npm run db:reset`): bộ Postman chạy lần hai trên cùng database lệch vài chỗ do dữ liệu sót. Bộ chạy của phiên kiểm thử: `D:\Work\New folder\qa-scripts\cf\chay-postman.js` (so với số gốc 406 request, 1377 phép kiểm).
 - Postman: chạy trong thư mục `Solaris BE`, lệnh như ở trên; thêm `-i "<tên nhóm>"` cho từng nhóm. Server phải ở đúng cổng 4000.
 - Cron trên máy dev: `curl "http://127.0.0.1:4000/cdn-cgi/local/scheduled?cron=23+*+*+*+*"`, kết quả trong log của `wrangler dev`.
 - Kết nối trực tiếp: Node 22 có sẵn `WebSocket`; truyền cookie bằng `new WebSocket(url, { headers: { Cookie } })`.
@@ -76,4 +91,7 @@ npm run format
 - **`wrangler dev` tự nạp lại code khi file đổi**, nhưng nếu lúc đó thiếu file được import thì log báo lỗi build và bản cũ tiếp tục chạy: xem `.wrangler/dev.log` hoặc màn hình `wrangler dev` khi thấy thay đổi không có hiệu lực.
 - **Cổng 4000**: backend cũ cũng dùng cổng này. Trước khi chạy `npm run dev` kiểm xem có server nào đang giữ cổng; đừng tắt server của chủ dự án (xem mục "Bẫy đã biết" trong `docs/tien-do.md` của backend cũ về cách nhận ra tiến trình).
 - **Số chỗ `withTransaction`**: đếm thật là 28 (lời giao việc ghi 38). Bảng đầy đủ ở `docs/kien-truc.md` mục 4.
+- **Chế độ `single-page-application` của Cloudflare trả `index.html` cho cả file thiếu** (đã thử trên máy dev: `/assets/khong-co.js` ra 200 HTML). Đã bỏ chế độ đó; `src/middleware/frontendMiddleware.js` tự quyết định như backend cũ (đường dẫn có đuôi file thì 404).
+- **Cloudflare tự chuyển `/demo-site/index.html` sang `/demo-site/`** (307, giữ query). Trình duyệt đi theo được; kịch bản dùng curl thì thêm `-L`.
+- **Tên Worker là `app`**, không phải `solaris`; D1 vẫn tên `solaris`. Chủ dự án đã đăng nhập Wrangler trên máy này: mọi lệnh `wrangler d1 ...` trong tài liệu và script đều kèm `--local`; đừng bỏ cờ đó, và đừng chạy `wrangler deploy` (việc của phiên điều phối).
 - **Lời commit**: commit đầu của repo có dòng `Co-Authored-By`, các commit của phiên kiến trúc giữ theo; dòng tiêu đề vẫn là một dòng tiếng Anh chữ thường.
