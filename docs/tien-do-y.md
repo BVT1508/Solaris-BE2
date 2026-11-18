@@ -1,6 +1,79 @@
 # Tiến độ phiên code Y
 
-Cập nhật: 18/11/2026, khoảng 23:25. Phiên Y làm các gói Y1, Y2, Y3, Y4 theo `docs/kien-truc.md` mục 12. Cả bốn gói đã code xong, đã commit, `npm run lint` sạch. Phần của phiên Y trong `docs/soat-thiet-ke.md` đã xử lý (mục "Xử lý kết quả soát thiết kế" bên dưới).
+Cập nhật: 18/11/2026, khoảng 23:30. Phiên Y làm các gói Y1, Y2, Y3, Y4 theo `docs/kien-truc.md` mục 12. **Đọc mục "Bàn giao" ngay dưới trước**; các mục sau là chi tiết.
+
+## Bàn giao (đọc phần này là làm tiếp được)
+
+Viết cho chính phiên Y sau khi context bị nén, hoặc cho phiên khác nhận việc. Cập nhật lần cuối: 18/11/2026, 23:30.
+
+### Đã xong và commit nào
+
+| Việc                                                   | Commit                                                                  | Trạng thái                                                        |
+| ------------------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Y1 khách hàng, đơn hàng                                | `8f01469`                                                               | xong, Postman 03 qua                                              |
+| Y2 hoạt động của đơn                                   | `8187393`                                                               | xong, nằm trong Postman 12, qua                                   |
+| Y3 link chia sẻ, `guestMiddleware.js`, `GET /r/:token` | `5b2682f`                                                               | xong, Postman 05 qua                                              |
+| Y4 vòng review, ảnh trang, dọn bản cũ                  | `1c1e178`                                                               | xong, Postman 07, 11, 12 qua; riêng việc dọn bản cũ chưa chạy thử |
+| Sửa theo bản soát thiết kế (điểm 1, 4, 7, 8, 11, 19)   | `092e946`                                                               | xong                                                              |
+| Ảnh trang nhận bằng một lời gọi kho                    | commit ngay sau mục này ("adopt page shots with a single storage call") | xong                                                              |
+| Ghi chú tiến độ                                        | `2f643b9`, `75d7006`, và commit của mục này                             |                                                                   |
+
+Lần chạy đủ bộ gần nhất (sau mọi thay đổi trên, D1 trống, cổng 4002): 406 request, 1377 phép kiểm, 0 lỗi. Báo cáo: `qa-scripts/cf/ket-qua/2026-11-18_232006_y-anh-trang-1-loi-goi.md`. `npm run lint` sạch. Chưa push gì (luật: không push).
+
+### Đang dở
+
+Không có việc nào đang viết dở. Cây làm việc sạch sau commit của mục này (kiểm bằng `git status --short`; nếu thấy file `src/` đã sửa mà chưa commit thì đó là của phiên X, đừng đụng).
+
+### Bước kế tiếp, theo thứ tự
+
+1. **Thử `purgeDeliveredVersions`** (`src/services/maintenanceService.js`). Chưa chạy lần nào. Đang chờ phiên điều phối hoặc phiên X quyết cách thử, vì trên máy dev chỉ kích được cả nhóm cron `41 */6 * * *`, trong đó có `purgeStalePending` của gói X2 xóa file tạm trên tài khoản Cloudinary thật. Khi được phép: lùi `delivered_at` của MỘT đơn thử trong `.wrangler/state-y` quá 30 ngày bằng `wrangler d1 execute`, kích cron, rồi kiểm `versions_purged_at`, `deliverables.files`, `rounds.pages`, `storage_trash`. Luật cũ: khi thử phải giới hạn về một đơn.
+2. **Nghe báo trực tiếp bằng WebSocket thật** cho các lời gọi của phiên Y: `notifyFeedback` loại `submitted`, `approved`, `round`; `disconnectLink` khi thu hồi; `disconnectMember` khi gỡ khỏi team. Cách nối: `docs/hop-dong-realtime.md`.
+3. **Giảm CPU nếu số đo cho thấy cần**: mọi thao tác ghi đơn trong `orderService.js` đọc lại đơn sau lô (`readPublic`), 3 lượt tới D1 mỗi request. Chờ luật ở `kien-truc.md` mục 11 của phiên X rồi mới sửa.
+4. **Ngày 3**: chạy các kịch bản cũ ở `qa-scripts/*.js` với backend mới (kiểm kê và việc phải đổi: `qa-scripts/cf/kiem-ke-kich-ban.md`).
+
+### Lệnh chạy và cổng của phiên Y
+
+- Server thử: cổng **4002**, inspector **9232**, dữ liệu riêng ở `.wrangler/state-y`, log ở `.wrangler/dev-y.log`. Không dùng cổng 4000, 4001; không đụng `.wrangler/state`, `.wrangler/state-x`; không chạy `npm run db:reset`.
+- Bật (từ thư mục `Solaris CF`, chạy nền): `npx wrangler dev --port 4002 --persist-to .wrangler/state-y --inspector-port 9232`
+- Tắt: `node y-server.js tat` (từ `qa-scripts/cf`). Làm trống dữ liệu: `node y-server.js lam-trong --khong-bat`, rồi bật lại bằng lệnh trên.
+- Chấm: `node chay-postman.js --base-url http://127.0.0.1:4002/api/v1` (cả bộ), thêm `-t 07` cho một thư mục (tự kéo theo thư mục phụ thuộc), `--nhan <chữ>` để đặt tên báo cáo. Mỗi lượt đủ bộ phải bắt đầu từ dữ liệu trống.
+- Kịch bản thử riêng (từ `qa-scripts/cf`): `node thu-y34.js` (link, vòng, bấm cùng lúc), `node thu-diem1.js` (điểm 1 của bản soát), `node thu-y2.js` (hoạt động, chạy sau Postman 03). `thu-y1.js` chỉ dùng khi chưa có gói thành viên.
+- Commit: `git add <file mới>` rồi `git commit -m "<lời tiếng Anh, chữ thường, một dòng>" -m "Co-Authored-By: ..." -- <đường dẫn>`, chỉ file của phiên Y. Không push.
+
+### Luật làm việc phải nhớ
+
+- Chỉ sửa file của gói Y (bảng ở `kien-truc.md` mục 12) và `docs/tien-do-y.md`. File dùng chung và file của phiên X cần sửa thì nhắn phiên điều phối `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`, không tự sửa.
+- Không sửa `Solaris BE`, `Solaris FE`, bộ Postman. Không in khóa bí mật (`.dev.vars`, `.env`). Chỉ tắt tiến trình của mình.
+- Kịch bản thử để ở `qa-scripts/cf/`, không để trong repo.
+
+### Bẫy đã gặp
+
+- `y-server.js bat` (bật tách rời bằng Node) không lên trên máy Windows này; bật bằng lệnh `npx wrangler dev ...` chạy nền.
+- Lệnh tắt tác vụ nền báo "failed" cho tác vụ `wrangler dev` mỗi khi tôi tắt server bằng `y-server.js tat`: đó là do mình tắt, không phải lỗi.
+- `wrangler d1 execute --command "<SQL>"` qua `child_process` với `shell: true` làm vỡ câu SQL; gọi thẳng `node node_modules/wrangler/bin/wrangler.js ...`.
+- Heredoc của Git Bash vỡ khi nội dung có dấu backtick hoặc `${}`: viết script vá ra file rồi chạy.
+- Bộ Postman chạy lần hai trên cùng dữ liệu trượt `03 / Staff không còn đơn nào` (cả backend cũ cũng vậy): không phải lỗi.
+- Postman CLI in các `pm.sendRequest` là "[errored] Could not read response data." dù chúng thành công; `chay-postman.js` đã xử lý, đừng đọc tay rồi tưởng lỗi.
+- Header HTTP không nhận chữ có dấu (`fetch` ném lỗi ByteString): giá trị thử cho `X-Device-Id` phải là ASCII.
+- `chay-postman.js` mặc định cổng 4000: luôn nêu `--base-url` khi chấm server của mình.
+
+### Điểm của `docs/soat-thiet-ke.md`
+
+- **Đã xử lý:** 1 (phần #6 và #8), 4, 7, 8, 11, 19 (phần `setCurrentPages`). Chi tiết ở mục "Xử lý kết quả soát thiết kế".
+- **Đã soát, không phải sửa:** 10, 14, 15, 20.
+- **Không thuộc phiên Y:** 2, 3, 5, 6, 9, 12, 13, 17, 18, 21 (phiên X).
+- **Còn mở:** điểm 4 mới sửa code, chưa chạy thử (bước kế tiếp số 1). Điểm 19, hai phần còn lại (trần 300 góp ý, `verdictByGuest`) nằm trong `feedbackService.js` của phiên X.
+
+### Tin nhắn của phiên điều phối
+
+| Tin                                                                                                        | Trạng thái                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Giao gói Y1 đến Y4                                                                                         | xong                                                                                                                                                               |
+| Kết quả soát thiết kế, phần của Y                                                                          | xong, trừ việc thử điểm 4                                                                                                                                          |
+| Tin CPU sát 10 ms: gom đọc bằng `readAll`, tránh đọc lại, không dựng schema trong request                  | đã bớt hai truy vấn (khách mở link, `listAssignableMembers`); việc đọc lại đơn sau lô còn giữ, xem bước kế tiếp số 3. Schema zod của phiên Y đều dựng ở cấp module |
+| Phiên X quyết `updateMember` có tăng `version` của đơn không                                               | phiên X đã chốt là không (ghi ở `kien-truc.md` mục 3.2); code của phiên Y không phụ thuộc quyết định đó                                                            |
+| Ghi mục bàn giao này và giữ nó cập nhật sau mỗi gói; context vượt khoảng 90% thì ghi xong rồi mới làm tiếp | đang làm theo                                                                                                                                                      |
+| Đang chờ trả lời: cách thử việc dọn bản cũ mà không kích việc dọn file tạm trên Cloudinary thật            | chưa có trả lời                                                                                                                                                    |
 
 ## Kết quả
 
@@ -69,7 +142,7 @@ Ngoài bộ Postman, có bốn kịch bản thử trực tiếp ở `qa-scripts/
 3. **`createShareLink` luôn guard "sản phẩm còn hoạt động"**, kể cả khi link không mở vòng (điểm 7 của bản soát).
 4. **Tìm đơn theo tên khách** dùng JOIN với `clients.name_search` thay cho "tìm tối đa 200 khách rồi lọc đơn" của bản cũ. Kết quả như nhau khi dưới 200 khách khớp; trên 200 thì bản mới đủ hơn.
 5. **Nhật ký `before` của `order.update`, `client.update`, `shareLink.update`** có cả khóa mang giá trị `null`. Bản cũ bỏ khóa mà document chưa từng có. Câu chữ ở "Hoạt động" chỉ đọc `after` nên không đổi.
-6. **Lưu ảnh trang gọi kho 2 lần mỗi ảnh mới** (hỏi rồi chuyển key), như `adoptScreenshot` của gói X3. Mục 8 muốn 1 lần (dùng luôn kết quả của `rename`) để 30 trang không vượt trần 50 lời gọi ra ngoài mỗi request. Driver hiện tại (`promote`) không trả kết quả của `rename`, và driver là file của phiên X. Hệ quả trên Cloudflare thật: một lần lưu quá 25 ảnh trang mới sẽ lỗi. Máy dev không có trần này nên Postman không lộ. **Cần phiên X**: cho `promote` trả `bytes`, `format`, `width`, `height`; khi có, `adoptPageShot` trong `roundService.js` đổi lại trong vài dòng.
+6. **Đã hết lệch (23:20):** lưu ảnh trang giờ gọi kho 1 lần mỗi ảnh mới. `adoptPageShot` dùng `storage.adoptPending` do phiên X thêm ở `a667d76` (chuyển key và nhận luôn loại, cỡ, kích thước; kiểm loại và cỡ sau khi nhận, sai thì đưa key chính thức vào thùng rác). 30 trang là 30 lời gọi, dưới trần 50. Postman 07 qua với Cloudinary thật.
 7. **`purgeDeliveredVersions`**: mỗi sản phẩm một lô có guard, có tăng `version` của sản phẩm khi sửa `files` (điểm 4 của bản soát; bản cũ không tăng). Không gọi kho, 5 đơn mỗi lượt (đúng mục 7).
 8. **`refreshCurrentRound`** tính "file còn được giữ" bằng JavaScript từ một lượt đọc (file của các vòng khác, file có góp ý ghim), không gọi `isRetained` từng file. Guard đầu lô đúng như dòng #25.
 9. **`setCurrentPages`** dùng `transact` với `retries: 0`: guard `status` và `pages_rev` sai thì trả 409 ngay và đưa ảnh vừa nhận vào thùng rác, không chạy lại (ảnh đã nhận gắn với lần đọc đó). Đúng ý bảng "ghi có điều kiện".
@@ -100,7 +173,7 @@ Về CPU (tin từ lần deploy thử): `listAssignableMembers` bỏ một truy 
 
 ## Điều cần phiên X hoặc phiên điều phối
 
-- Điểm lệch 6: `promote` của driver Cloudinary trả kết quả của `rename`.
+- (Đã xong) Điểm lệch 6: phiên X đã thêm `storage.adoptPending`, phiên Y đã dùng.
 - Cách thử việc dọn bản cũ mà không kích việc dọn file tạm trên Cloudinary thật.
 - Thêm một dòng cho `purgeDeliveredVersions` vào bảng mục 4 của `kien-truc.md` (điểm 4 của bản soát).
 - Chưa có gì cần sửa ở file dùng chung.
