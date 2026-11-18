@@ -1,4 +1,12 @@
-import { all, batch, guard, guardLabelOf, sql } from "../db/d1.js";
+import {
+  all,
+  batch,
+  guard,
+  guardLabelOf,
+  readAll,
+  run,
+  sql,
+} from "../db/d1.js";
 import { Deliverable, Round } from "../models/index.js";
 import logger from "../utils/logger.js";
 import { fromNow, now } from "../utils/time.js";
@@ -13,10 +21,75 @@ const KEEP_VERSIONS_MS = 30 * 24 * 60 * 60 * 1000;
  */
 const ORDERS_PER_RUN = 5;
 
+/** Đơn vẫn đủ điều kiện dọn: còn "delivered" và chưa có mốc đã dọn. Mở lại đơn xóa mốc và đổi trạng thái. */
+const stillPurgeable = (orderId) => sql`
+  SELECT 1 FROM orders
+  WHERE id = ${orderId} AND status = 'delivered' AND versions_purged_at IS NULL`;
+
+/**
+ * Lô dọn MỘT sản phẩm, hoặc null khi sản phẩm không có gì để dọn. Trả { statements, files }.
+ * Đầu lô khẳng định lại mọi điều vừa đọc: đơn còn đủ điều kiện, sản phẩm chưa ai sửa (version), vòng mới nhất vẫn là
+ * vòng đã đọc. Không có các guard này thì việc dọn ghi đè `files` cũ lên file nhân viên vừa đính, hoặc dọn một đơn
+ * vừa được mở lại. Sửa `files` thì tăng version của sản phẩm, để thao tác đính hay gỡ file đang dở của ai đó
+ * (đọc version cũ) nhận 409 thay vì ghi lại mục file mà kho sắp xóa.
+ */
+function purgePlanFor(orderId, d, rounds) {
+  const latest = rounds.reduce(
+    (best, round) => (!best || round.number > best.number ? round : best),
+    null
+  );
+  const keep = new Set(latest?.files || []);
+  for (const file of d.files || []) {
+    if (!file.removedAt) keep.add(file.id);
+  }
+  // Sản phẩm web: chỉ giữ bộ ảnh chụp trang của vòng cuối.
+  const olderWithPages = rounds.filter(
+    (round) => round.id !== latest?.id && (round.pages || []).length > 0
+  );
+  const dropped = (d.files || []).filter((file) => !keep.has(file.id));
+  if (olderWithPages.length === 0 && dropped.length === 0) return null;
+
+  const at = now();
+  const trash = [
+    ...olderWithPages.flatMap((round) =>
+      round.pages.map((page) => ({
+        provider: page.shot.provider,
+        key: page.shot.key,
+      }))
+    ),
+    ...dropped.map((file) => ({ provider: file.provider, key: file.key })),
+  ];
+  const statements = [
+    guard(stillPurgeable(orderId)),
+    guard(
+      sql`SELECT 1 FROM deliverables WHERE id = ${d.id} AND version = ${d.version}`
+    ),
+    // Vòng mới nhất vẫn là vòng đã đọc (không có vòng nào thì vẫn chưa có vòng nào).
+    guard(sql`
+      SELECT 1 WHERE (SELECT MAX(number) FROM rounds WHERE deliverable_id = ${d.id})
+        IS ${latest ? latest.number : null}`),
+    ...olderWithPages.map(
+      (round) =>
+        sql`UPDATE rounds SET pages = '[]', updated_at = ${at} WHERE id = ${round.id}`
+    ),
+  ];
+  if (dropped.length > 0) {
+    statements.push(
+      sql`UPDATE deliverables SET ${Deliverable.set({
+        files: d.files.filter((file) => keep.has(file.id)),
+        updatedAt: at,
+      })}, version = version + 1 WHERE id = ${d.id}`
+    );
+  }
+  statements.push(storage.trashStatement(trash));
+  return { statements, files: trash.length };
+}
+
 /**
  * Với đơn đã bàn giao quá hạn: mỗi sản phẩm chỉ giữ bộ file của vòng cuối và file đang dùng,
  * các bản cũ vào thùng rác của kho. Góp ý cũ vẫn còn, nhưng không mở lại được trên bản đã dọn.
- * Mỗi đơn là một lô: sửa sản phẩm, sửa vòng, ghi thùng rác và đánh dấu đơn cùng thành hoặc cùng mất.
+ * Mỗi sản phẩm một lô có guard (xem purgePlanFor). Mốc "đã dọn" của đơn chỉ đặt khi mọi sản phẩm của đơn đã qua,
+ * và chỉ khi đơn vẫn còn "delivered". Sản phẩm nào guard sai (dữ liệu vừa đổi) thì cả đơn để lượt sau.
  * Trả số file đã đưa vào thùng rác.
  *
  * orderId: chỉ dọn đúng một đơn. KHI THỬ PHẢI TRUYỀN orderId, không thì mọi đơn đủ điều kiện đều bị dọn.
@@ -32,78 +105,41 @@ export async function purgeDeliveredVersions(
   ];
   if (orderId) where.push(sql`id = ${orderId}`);
   const orders = await all(sql`
-    SELECT id FROM orders WHERE ${sql.and(where)} LIMIT ${ORDERS_PER_RUN}`);
+    SELECT id FROM orders WHERE ${sql.and(where)} ORDER BY id LIMIT ${ORDERS_PER_RUN}`);
 
   let deleted = 0;
   for (const order of orders) {
-    const [deliverableRows, roundRows] = await Promise.all([
-      all(
-        sql`SELECT id, files, version FROM deliverables WHERE order_id = ${order.id}`
-      ),
-      all(
-        sql`SELECT id, deliverable_id, number, files, pages FROM rounds WHERE order_id = ${order.id}`
-      ),
+    const [deliverableRows, roundRows] = await readAll([
+      sql`SELECT id, files, version FROM deliverables WHERE order_id = ${order.id} ORDER BY id`,
+      sql`SELECT id, deliverable_id, number, files, pages
+          FROM rounds WHERE order_id = ${order.id} ORDER BY number`,
     ]);
     const rounds = roundRows.map(Round.fromRow);
-    const trash = [];
-    const statements = [
-      // Đơn vừa được mở lại (hoặc lượt khác vừa dọn xong) thì bỏ qua đơn này.
-      guard(sql`
-        SELECT 1 FROM orders
-        WHERE id = ${order.id} AND status = 'delivered' AND versions_purged_at IS NULL`),
-    ];
 
+    let complete = true;
     for (const row of deliverableRows) {
       const d = Deliverable.fromRow(row);
-      const mine = rounds.filter((round) => round.deliverable === d.id);
-      const latest = mine.reduce(
-        (best, round) => (!best || round.number > best.number ? round : best),
-        null
+      const plan = purgePlanFor(
+        order.id,
+        d,
+        rounds.filter((round) => round.deliverable === d.id)
       );
-      const keep = new Set(latest?.files || []);
-      for (const file of d.files || []) {
-        if (!file.removedAt) keep.add(file.id);
-      }
-      // Sản phẩm web: chỉ giữ bộ ảnh chụp trang của vòng cuối.
-      for (const round of mine) {
-        if (round.id === latest?.id || (round.pages || []).length === 0) {
-          continue;
-        }
-        statements.push(
-          sql`UPDATE rounds SET pages = '[]', updated_at = ${now()} WHERE id = ${round.id}`
-        );
-        for (const page of round.pages) {
-          trash.push({ provider: page.shot.provider, key: page.shot.key });
-        }
-      }
-
-      const dropped = (d.files || []).filter((file) => !keep.has(file.id));
-      if (dropped.length === 0) continue;
-      statements.push(
-        // Sản phẩm vừa bị sửa (đính, gỡ file) giữa lúc đọc và lúc ghi thì không ghi đè: để lượt sau.
-        guard(
-          sql`SELECT 1 FROM deliverables WHERE id = ${d.id} AND version = ${d.version}`
-        ),
-        // Không tăng version, như bản cũ: đây không phải thay đổi người dùng làm.
-        sql`UPDATE deliverables SET ${Deliverable.set({
-          files: d.files.filter((file) => keep.has(file.id)),
-        })} WHERE id = ${d.id}`
-      );
-      for (const file of dropped) {
-        trash.push({ provider: file.provider, key: file.key });
+      if (!plan) continue;
+      try {
+        await batch(plan.statements);
+        deleted += plan.files;
+      } catch (err) {
+        // Guard sai: dữ liệu vừa đổi, đơn này để lượt sau. Lỗi khác thì ném cho việc định kỳ ghi log.
+        if (guardLabelOf(err) === null) throw err;
+        complete = false;
+        break;
       }
     }
-
-    statements.push(
-      storage.trashStatement(trash),
-      sql`UPDATE orders SET versions_purged_at = ${now()} WHERE id = ${order.id}`
-    );
-    try {
-      await batch(statements);
-      deleted += trash.length;
-    } catch (err) {
-      // Guard sai: dữ liệu vừa đổi, đơn này để lượt sau. Lỗi khác thì ném cho việc định kỳ ghi log.
-      if (guardLabelOf(err) === null) throw err;
+    if (complete) {
+      // Mốc đặt có điều kiện: đơn vừa được mở lại thì không đánh dấu.
+      await run(sql`
+        UPDATE orders SET versions_purged_at = ${now()}
+        WHERE id = ${order.id} AND status = 'delivered' AND versions_purged_at IS NULL`);
     }
   }
   if (deleted) logger.info({ deleted }, "Đã dọn bản cũ của đơn đã bàn giao");

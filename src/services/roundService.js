@@ -6,7 +6,6 @@ import {
   readAll,
   sql,
   transact,
-  uniqueViolationOf,
 } from "../db/d1.js";
 import { Deliverable, Round } from "../models/index.js";
 import { assertCan } from "../policies/policy.js";
@@ -356,19 +355,9 @@ export async function openNextRound(actor, deliverableId, input = {}) {
     };
   };
 
-  let result;
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      result = await transact(plan);
-      break;
-    } catch (err) {
-      // Hai người mở cùng lúc: chỉ mục duy nhất (sản phẩm, số vòng) làm lô sau lỗi; chạy lại thì thấy "vòng hiện tại còn mở".
-      const clash = uniqueViolationOf(err)?.some((column) =>
-        column.startsWith("rounds.")
-      );
-      if (!clash || attempt >= 2) throw err;
-    }
-  }
+  // Hai người mở cùng lúc: guard "vòng mới nhất vẫn là vòng đã đọc" của người sau sai, `transact` chạy lại `plan`
+  // và lần đó báo "Vòng hiện tại còn mở...". Chỉ mục duy nhất (sản phẩm, số vòng) chỉ còn là lưới cuối.
+  const result = await transact(plan);
   // Khách đang mở link thấy ngay bản mới của vòng vừa mở.
   notifyFeedback({
     deliverableId,
@@ -649,11 +638,12 @@ export async function setCurrentPages(actor, deliverableId, input) {
     updated = await transact(
       async () => ({
         statements: [
-          // Ghi có điều kiện: vòng đổi trạng thái hoặc người khác vừa lưu bộ ảnh (pages_rev đổi) thì lần này thua.
-          // Không dựa vào updated_at vì khách lưu nháp cũng làm nó đổi.
+          // Ghi có điều kiện: vòng đổi trạng thái, người khác vừa lưu bộ ảnh (pages_rev đổi), hoặc vừa có vòng mới hơn
+          // (bộ ảnh phải gắn vào vòng mới nhất) thì lần này thua. Không dựa vào updated_at vì khách lưu nháp cũng làm nó đổi.
           guard(sql`
             SELECT 1 FROM rounds
-            WHERE id = ${latest.id} AND status = ${latest.status} AND pages_rev = ${latest.pagesRev}`),
+            WHERE id = ${latest.id} AND status = ${latest.status} AND pages_rev = ${latest.pagesRev}
+              AND number = (SELECT MAX(number) FROM rounds WHERE deliverable_id = ${d.id})`),
           sql`UPDATE rounds SET ${Round.set({ pages, updatedAt: at })}, pages_rev = pages_rev + 1
               WHERE id = ${latest.id} RETURNING *`,
           auditStatement({

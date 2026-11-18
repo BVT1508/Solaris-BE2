@@ -1,12 +1,4 @@
-import {
-  all,
-  first,
-  guard,
-  guardNot,
-  readAll,
-  sql,
-  transact,
-} from "../db/d1.js";
+import { all, first, guard, guardNot, sql, transact } from "../db/d1.js";
 import { Client, Order } from "../models/index.js";
 import { assertCan } from "../policies/policy.js";
 import AppError, { STALE } from "../utils/appError.js";
@@ -152,22 +144,54 @@ async function resolveAssignableMembers(orgId, memberIds, keepIds = []) {
  * Guard cho lô: những điều resolveAssignableMembers vừa kiểm vẫn còn đúng lúc ghi (không ai trong danh sách vừa bị khóa,
  * vừa lên admin hay vừa đổi vai trò). Sai thì `transact` chạy lại `plan`, lần đó tự ra đúng lời báo.
  */
-const assignableGuard = (orgId, ids, roleOf, keepIds = []) => {
-  const kept = new Set(keepIds);
-  const expected = ids.map((id) => ({
-    id,
-    role: roleOf.get(id),
-    kept: kept.has(id) ? 1 : 0,
-  }));
+const assignableGuard = (orgId, ids, roleOf, orderId) => {
+  const expected = ids.map((id) => ({ id, role: roleOf.get(id) }));
+  // Việc miễn cho người đang bị khóa tính bằng SQL LÚC CHẠY LÔ (đang có dòng trong team của chính đơn này),
+  // không theo danh sách `plan` đã đọc. Vai trò phải đúng như đã đọc: admin không bao giờ qua (plan đã từ chối admin),
+  // và người vừa bị hạ xuống viewer hay vừa lên admin làm guard sai. Tạo đơn (chưa có orderId) thì không miễn ai.
+  const stillInTeam = orderId
+    ? sql`EXISTS (SELECT 1 FROM order_members om WHERE om.order_id = ${orderId} AND om.member_id = m.id)`
+    : sql.raw("0");
   return guard(sql`
     SELECT 1 WHERE (
       SELECT count(*) FROM json_each(${JSON.stringify(expected)}) AS want
       JOIN members m ON m.id = json_extract(want.value, '$.id')
       WHERE m.org_id = ${orgId}
+        AND m.role <> 'admin'
         AND m.role = json_extract(want.value, '$.role')
-        AND (m.status <> 'suspended' OR json_extract(want.value, '$.kept') = 1)
+        AND (m.status <> 'suspended' OR ${stillInTeam})
     ) = ${ids.length}`);
 };
+
+/**
+ * Guard cho lô: team của đơn vẫn đúng là team `plan` đã đọc (cùng những người, cùng ai là leader).
+ * Cần riêng vì team không nằm trên bản ghi đơn: đổi vai trò một thành viên hay khôi phục chủ hệ thống sửa bảng
+ * order_members mà không đổi orders.version, nên guard `stale` của đơn không thấy. Mọi điều `plan` suy ra từ team
+ * (ai bị gỡ, leader hiện tại, người đang ở sẵn được giữ) dựa vào guard này.
+ */
+const teamUnchangedGuard = (orderId, team) => {
+  const expected = team.map((m) => ({ m: m.id, l: m.leaderPosition }));
+  return guard(sql`
+    SELECT 1 WHERE (SELECT count(*) FROM order_members WHERE order_id = ${orderId}) = ${team.length}
+      AND (
+        SELECT count(*) FROM json_each(${JSON.stringify(expected)}) AS was
+        JOIN order_members om ON om.order_id = ${orderId}
+          AND om.member_id = json_extract(was.value, '$.m')
+          AND om.leader_position IS json_extract(was.value, '$.l')
+      ) = ${team.length}`);
+};
+
+/**
+ * Guard cho lô: vai trò của những người này vẫn như `plan` đã đọc. Dùng cho người BỊ GỠ khỏi team:
+ * luật "chỉ quản trị viên gỡ được quản lý" quyết định dựa vào vai trò của họ.
+ */
+const rolesUnchangedGuard = (members) =>
+  guard(sql`
+    SELECT 1 WHERE (
+      SELECT count(*) FROM json_each(${JSON.stringify(members.map((m) => ({ id: m.id, role: m.role })))}) AS was
+      JOIN members m ON m.id = json_extract(was.value, '$.id')
+        AND m.role = json_extract(was.value, '$.role')
+    ) = ${members.length}`);
 
 /**
  * Leader của đơn: phải nằm trong team của đơn và là người làm được việc (nhân viên hoặc quản lý).
@@ -445,17 +469,15 @@ export async function setOrderMembers(actor, id, input) {
         roleOf
       );
       const added = wanted.filter((m) => !current.includes(m));
-      const removed = current.filter((m) => !wanted.includes(m));
+      const removedMembers = order.team.filter((m) => !wanted.includes(m.id));
+      const removed = removedMembers.map((m) => m.id);
 
       if (actor.role !== "admin") {
         if (differ(currentLeaders, leaders)) {
           throw new AppError("Chỉ quản trị viên đổi được leader của đơn.", 403);
         }
-        const removedManagers = order.team.filter(
-          (m) => removed.includes(m.id) && m.role === "manager"
-        ).length;
         if (
-          removedManagers > 0 ||
+          removedMembers.some((m) => m.role === "manager") ||
           added.some((m) => roleOf.get(m) === "manager")
         ) {
           throw new AppError(
@@ -471,12 +493,15 @@ export async function setOrderMembers(actor, id, input) {
           sql`SELECT 1 FROM orders WHERE id = ${id} AND version = ${input.version}`,
           "stale"
         ),
+        // Team vẫn là team đã đọc: version của đơn không đổi khi vai trò một người đổi, nên phải kiểm riêng.
+        teamUnchangedGuard(id, order.team),
+        // Vai trò và trạng thái của mọi người trong danh sách mới, và vai trò của người bị gỡ, vẫn như đã đọc.
+        assignableGuard(actor.orgId, wanted, roleOf, id),
+        rolesUnchangedGuard(removedMembers),
       ];
-      if (wanted.length) {
-        statements.push(assignableGuard(actor.orgId, wanted, roleOf, current));
-      }
       statements.push(
-        sql`DELETE FROM order_members WHERE order_id = ${id} AND member_id IN ${sql.list(removed)}`,
+        // Xóa theo danh sách MỚI (ai không còn trong đó thì ra), không theo danh sách "bị gỡ" tính lúc đọc.
+        sql`DELETE FROM order_members WHERE order_id = ${id} AND member_id NOT IN ${sql.list(wanted)}`,
         upsertTeamStatement(id, wanted, leaders, at),
         sql`UPDATE orders SET version = version + 1, updated_at = ${at} WHERE id = ${id}`,
         // Người bị gỡ mất quyền với đơn: bỏ giao các góp ý còn dang dở của họ trong đơn này.
@@ -514,28 +539,34 @@ export async function listAssignableMembers(actor, id) {
       ? ["manager", "staff", "viewer"]
       : ["staff", "viewer"];
   const teamIds = order.team.map((m) => m.id);
-  const [team, others] = await readAll([
-    sql`SELECT id, name, email, role, status, skills FROM members
-        WHERE id IN ${sql.list(teamIds)} AND org_id = ${actor.orgId}`,
-    sql`SELECT id, name, email, role, status, skills FROM members
-        WHERE id NOT IN ${sql.list(teamIds)} AND org_id = ${actor.orgId}
-          AND role IN ${sql.list(addable)} AND status <> 'suspended'`,
-  ]);
+  // Người trong team đã có đủ trong lần đọc đơn (cột team); chỉ hỏi thêm những người chưa ở trong team.
+  const others = (
+    await all(sql`
+      SELECT id, name, email, role, status, skills FROM members
+      WHERE id NOT IN ${sql.list(teamIds)} AND org_id = ${actor.orgId}
+        AND role IN ${sql.list(addable)} AND status <> 'suspended'
+      ORDER BY id`)
+  ).map((m) => ({ ...m, skills: JSON.parse(m.skills || "[]") }));
   const inTeam = new Set(teamIds);
   const leaderIds = new Set(leaderIdsOf(order.team));
-  return [...team, ...others]
-    .sort((a, b) => a.name.localeCompare(b.name, "vi"))
-    .map((m) => ({
-      id: m.id,
-      name: m.name,
-      email: m.email,
-      role: m.role,
-      status: m.status,
-      skills: JSON.parse(m.skills || "[]"),
-      inTeam: inTeam.has(m.id),
-      isLeader:
-        m.role === "manager" || (m.role === "staff" && leaderIds.has(m.id)),
-    }));
+  return (
+    [...order.team, ...others]
+      // Trùng tên thì theo id, để hai lần gọi cho cùng một thứ tự.
+      .sort(
+        (a, b) => a.name.localeCompare(b.name, "vi") || (a.id < b.id ? -1 : 1)
+      )
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email,
+        role: m.role,
+        status: m.status,
+        skills: m.skills,
+        inTeam: inTeam.has(m.id),
+        isLeader:
+          m.role === "manager" || (m.role === "staff" && leaderIds.has(m.id)),
+      }))
+  );
 }
 
 /**

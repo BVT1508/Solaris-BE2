@@ -3,11 +3,11 @@ import {
   all,
   first,
   guard,
+  guardNot,
   readAll,
   run,
   sql,
   transact,
-  uniqueViolationOf,
 } from "../db/d1.js";
 import { Deliverable, Round, ShareLink } from "../models/index.js";
 import { can, assertCan } from "../policies/policy.js";
@@ -155,17 +155,26 @@ export async function createShareLink(actor, deliverableId, input) {
     let round = Round.fromRow(latest);
     const openedRound = !round;
     const statements = [
-      // Sản phẩm vẫn như lúc đọc: link này mở vòng 1 thì bộ file chụp vào vòng phải đúng là bộ đang có
-      // (ai đó gỡ hay thay file cùng lúc làm version đổi); không mở vòng thì chỉ cần sản phẩm chưa bị lưu trữ.
+      // Sản phẩm chưa bị lưu trữ giữa lúc đọc và lúc ghi (luôn kiểm, kể cả khi link này không mở vòng).
       guard(
-        openedRound
-          ? sql`SELECT 1 FROM deliverables WHERE id = ${d.id} AND version = ${d.version}`
-          : sql`SELECT 1 FROM deliverables WHERE id = ${d.id} AND status = 'active'`
+        sql`SELECT 1 FROM deliverables WHERE id = ${d.id} AND status = 'active'`
       ),
       orderNotDeliveredGuard(d.order),
       guard(sql`SELECT 1 WHERE (${liveLinksQuery(d.id)}) < ${MAX_LIVE_LINKS}`),
-      ShareLink.insert(link),
     ];
+    if (openedRound) {
+      statements.push(
+        // Link này mở vòng 1 thì bộ file chụp vào vòng phải đúng là bộ đang có
+        // (ai đó gỡ hay thay file cùng lúc làm version của sản phẩm đổi).
+        guard(
+          sql`SELECT 1 FROM deliverables WHERE id = ${d.id} AND version = ${d.version}`
+        ),
+        // Hai người tạo link đầu cùng lúc: người sau thấy đã có vòng, `transact` chạy lại `plan`,
+        // lần đó chỉ tạo link và dùng chung vòng vừa mở.
+        guardNot(sql`SELECT 1 FROM rounds WHERE deliverable_id = ${d.id}`)
+      );
+    }
+    statements.push(ShareLink.insert(link));
     if (openedRound) {
       round = {
         id: newId(),
@@ -180,7 +189,6 @@ export async function createShareLink(actor, deliverableId, input) {
         createdAt: at,
         updatedAt: at,
       };
-      // Hai người tạo link đầu cùng lúc: chỉ mục duy nhất (sản phẩm, số vòng) làm lô sau lỗi, hàm chạy lại bên dưới.
       statements.push(Round.insert(round));
     }
     const syncAt = statements.push(syncOrderStatusStatement(d.order)) - 1;
@@ -209,16 +217,7 @@ export async function createShareLink(actor, deliverableId, input) {
     };
   };
 
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await transact(plan);
-    } catch (err) {
-      // Người khác vừa mở vòng 1: chạy lại, lần này thấy đã có vòng nên chỉ tạo link.
-      const unique = uniqueViolationOf(err);
-      const roundClash = unique?.some((column) => column.startsWith("rounds."));
-      if (!roundClash || attempt >= 2) throw err;
-    }
-  }
+  return transact(plan);
 }
 
 // ---------- Đọc (team) ----------
@@ -375,7 +374,7 @@ export async function revokeShareLink(actor, id, input) {
  * Link thu hồi và link không có báo chung một lời để không dò được token nào từng tồn tại.
  * Sản phẩm lưu trữ thì link chết (410) tới khi khôi phục.
  * Trả { link, deliverable, round, order, orderStatus }: round là vòng mới nhất (null nếu chưa có),
- * order chỉ gồm { id, status, title, type, client }.
+ * order chỉ gồm { id, status, title, type, client, clientName }.
  */
 export async function loadLinkContext(token) {
   const [[linkRow], [deliverableRow], [roundRow], [order]] = await readAll([
@@ -384,8 +383,10 @@ export async function loadLinkContext(token) {
         WHERE l.token = ${token}`,
     sql`SELECT r.* FROM rounds r JOIN share_links l ON l.deliverable_id = r.deliverable_id
         WHERE l.token = ${token} ORDER BY r.number DESC LIMIT 1`,
-    sql`SELECT o.id, o.status, o.title, o.type, o.client_id AS client
-        FROM orders o JOIN share_links l ON l.order_id = o.id WHERE l.token = ${token}`,
+    // Tên khách lấy luôn ở đây: màn khách mở link cần, đỡ một lượt đi về riêng.
+    sql`SELECT o.id, o.status, o.title, o.type, o.client_id AS client, c.name AS clientName
+        FROM orders o JOIN share_links l ON l.order_id = o.id
+        LEFT JOIN clients c ON c.id = o.client_id WHERE l.token = ${token}`,
   ]);
   const link = ShareLink.fromRow(linkRow);
   if (!link || link.status === "revoked") {
@@ -419,13 +420,15 @@ export async function openByToken(token) {
     order,
     orderStatus,
   } = await loadLinkContext(token);
-  const [client, pub] = await Promise.all([
-    first(sql`SELECT name FROM clients WHERE id = ${order.client}`),
+  const openedAt = now();
+  const [pub] = await Promise.all([
     toPublicDeliverable(d, { showKey: false }),
     // Thống kê mở link: mỗi lần gọi đếm một lượt (frontend đã biết). Lỗi ghi không được chặn khách.
     // Chờ ghi xong mới trả lời, như bản cũ: team mở danh sách link ngay sau đó phải thấy lượt mở này.
+    // updated_at đổi theo như bản cũ; version thì không (không phải thay đổi người dùng làm).
     run(
-      sql`UPDATE share_links SET last_opened_at = ${now()}, open_count = open_count + 1
+      sql`UPDATE share_links SET last_opened_at = ${openedAt}, open_count = open_count + 1,
+            updated_at = ${openedAt}
           WHERE id = ${link.id}`
     ).catch((err) => logger.warn({ err }, "Không ghi được lượt mở link")),
   ]);
@@ -481,7 +484,7 @@ export async function openByToken(token) {
       // Đơn đã bàn giao thì màn của khách chỉ còn để xem.
       delivered: orderStatus === "delivered",
     },
-    client: { name: client?.name || null },
+    client: { name: order.clientName || null },
     deliverable: {
       id: pub.id,
       type: pub.type,
