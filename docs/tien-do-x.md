@@ -4,20 +4,24 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Trạng thái các gói
 
-| Gói | Nội dung                                        | Trạng thái                                  | Postman của gói (D1 trống, cổng 4001)                    |
-| --- | ----------------------------------------------- | ------------------------------------------- | -------------------------------------------------------- |
-| X1  | Thành viên                                      | xong                                        | 02: 20/20 request, 74/74 phép kiểm                       |
-| X2  | Sản phẩm bàn giao, kho file Cloudinary qua HTTP | xong                                        | 04: 48/48, 162/162. 10 (upload thật): 10/10, 30/30       |
-| X3  | Góp ý của khách                                 | xong                                        | 06: 46/46, 157/157. 13: 12/12, 37/37                     |
-| X4  | Góp ý phía team                                 | xong phần code; chưa chấm được bằng Postman | 07 chạy sau bước "khách gửi góp ý" của gói Y4 (xem dưới) |
+Cả bốn gói xong. Lượt chạy cả bộ chốt (`qa-scripts/cf/ket-qua/2026-11-18_230411_x-ca-bo-2`, D1 trống, server của phiên X ở cổng 4001, code của cả X lẫn Y tới commit `1c1e178` cộng các commit của X sau đó): **406/406 request, 1377/1377 phép kiểm, 0 lỗi, 0 thiếu**, bằng đúng số gốc của backend cũ.
 
-Lượt chạy cả bộ gần nhất (`ket-qua/2026-11-18_*_x-ca-bo`, D1 trống): 406/406 request chạy, 1257 phép kiểm đạt trên 1377. Đạt hết: 01, 02, 03, 04, 05, 06, 08, 09, 10, 13. Trượt: 07 (99 lỗi, 33 thiếu), 11 (7 thiếu), 12 (1 thiếu). Lúc chạy, các route của gói Y4 (`POST /r/:token/submit`, `/approve`, `POST /deliverables/:id/rounds`, ảnh trang) chưa có nên trả 404; mọi lỗi của 07 bắt đầu từ request "Khách gửi góp ý cho team" và lan xuống các request sau (thiếu biến, số thứ tự lệch 1 vì bước trước không chạy). Chưa có phép kiểm nào trượt được truy về code của gói X. Phải chạy lại 07, 11, 12 khi Y4 xong mới kết luận được phần team của X4.
+| Gói | Nội dung                                        | Thư mục Postman chấm gói              | Kết quả                                      |
+| --- | ----------------------------------------------- | ------------------------------------- | -------------------------------------------- |
+| X1  | Thành viên                                      | 02                                    | 20/20 request, 74/74 phép kiểm               |
+| X2  | Sản phẩm bàn giao, kho file Cloudinary qua HTTP | 04; 10 (upload thật lên Cloudinary)   | 48/48, 162/162; 10/10, 30/30                 |
+| X3  | Góp ý của khách                                 | 06; 13                                | 46/46, 157/157; 12/12, 37/37                 |
+| X4  | Góp ý phía team                                 | 07 (chung với gói Y4); 11, 12 có dùng | 119/119, 409/409; 24/24, 73/73; 20/20, 65/65 |
+
+Các thư mục còn lại trong cùng lượt: 01 (7/7, 29/29), 03 (52/52, 169/169), 05 (41/41, 143/143), 08 (3/3, 12/12), 09 (4/4, 17/17).
+
+Lượt chạy cả bộ trước đó (`..._x-ca-bo`, lúc gói Y4 chưa có) trượt 07, 11, 12 vì các route gửi, duyệt, mở vòng trả 404; không phép kiểm nào trượt do code của gói X.
 
 ## Đã thử ngoài Postman
 
 Kịch bản để ở `D:\Work\New folder\qa-scripts\cf\` (tiền tố `x_`):
 
-- `x_kiem_gop_y_team.mjs`: 68 phép kiểm, đạt cả 68. Gọi API thật trên cổng 4001, kèm ba kết nối WebSocket thật (hai tab team, một khách nối bằng token thật). Gồm: team tạo ghi chú và bài cho khách, gửi lại cùng `clientId`, lọc danh sách, giao việc, `version` cũ, người không gán được, việc của tôi, trả lời hai phía, khách tạo, sửa, xóa nháp, số thứ tự không cấp lại, kiểm khóa nhúng, xác nhận và từ chối, luật xóa, nhật ký hoạt động có đủ việc về góp ý. Về kết nối trực tiếp: khách nối bằng token thật; `feedback:event` tới team và khách; ghi chú nội bộ không tới khách; phía khách `actor` chỉ có `kind`; tab gây ra thay đổi không nhận lại sự kiện của mình (cả team lẫn khách).
+- `x_kiem_gop_y_team.mjs`: 68 phép kiểm, đạt cả 68 (chạy lại sau khi gói Y4 vào, vẫn 68). Gọi API thật trên cổng 4001, kèm ba kết nối WebSocket thật (hai tab team, một khách nối bằng token thật). Gồm: team tạo ghi chú và bài cho khách, gửi lại cùng `clientId`, lọc danh sách, giao việc, `version` cũ, người không gán được, việc của tôi, trả lời hai phía, khách tạo, sửa, xóa nháp, số thứ tự không cấp lại, kiểm khóa nhúng, xác nhận và từ chối, luật xóa, nhật ký hoạt động có đủ việc về góp ý. Về kết nối trực tiếp: khách nối bằng token thật; `feedback:event` tới team và khách; ghi chú nội bộ không tới khách; phía khách `actor` chỉ có `kind`; tab gây ra thay đổi không nhận lại sự kiện của mình (cả team lẫn khách).
 - `x_doi_chieu_cloudinary.mjs`: so phần ký viết lại (`src/services/storage/cloudinarySign.js`) với SDK Cloudinary thật của backend cũ, khóa giả, không gọi mạng. 30 trường hợp (URL gốc bốn đuôi, ảnh nhỏ, ảnh trang PDF, chữ ký tham số upload, đổi tên, xóa), khớp cả 30.
 - Upload ba bước với Cloudinary thật (Postman nhóm 10): xin chữ ký, đẩy thẳng lên Cloudinary, đính (hỏi kho, đổi tên), xem ảnh qua URL ký, gỡ file. Sau khi gỡ, bảng `storage_trash` về 0 dòng và log không có cảnh báo: xóa theo lô qua Admin API chạy được.
 - Cron của kho gọi tay trên máy dev: dọn file tạm (0 file quá hạn), dọn thùng rác. Chạy không lỗi.
@@ -25,7 +29,6 @@ Kịch bản để ở `D:\Work\New folder\qa-scripts\cf\` (tiền tố `x_`):
 
 ## Chưa thử
 
-- Phần team của nhóm Postman 07, và 11, 12: chờ gói Y4.
 - Ảnh chụp màn hình của khách với Cloudinary thật (`screenshotKey`, `PUT .../screenshot`): nhóm 13 qua nhưng cần đối chiếu xem nhóm đó có đẩy ảnh thật không; đường code dùng chung `statPending` và `promote` với upload file đã chạy thật.
 - Hạn mức: 300 góp ý mỗi link mỗi vòng (429), 60 lần xin chỗ đẩy ảnh mỗi link trong 10 phút (máy dev nới gấp 10), luồng 200 trả lời.
 - Đồng thời: hai request cùng `clientId` cùng lúc, tạo nháp đúng lúc vòng khép, hai người xử lý một bài. Guard đã có nhưng chưa bắn song song.
