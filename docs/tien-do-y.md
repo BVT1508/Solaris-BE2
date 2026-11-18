@@ -6,6 +6,16 @@ Cập nhật: 18/11/2026, khoảng 23:30. Phiên Y làm các gói Y1, Y2, Y3, Y4
 
 Viết cho chính phiên Y sau khi context bị nén, hoặc cho phiên khác nhận việc. Cập nhật lần cuối: 18/11/2026, 23:30.
 
+### ĐANG LÀM (19/11/2026, khoảng 00:50): đợt việc thứ tư của phiên điều phối
+
+Ba việc, làm liên tục:
+
+1. **Thử `purgeDeliveredVersions`** bằng cách kích riêng một việc định kỳ (phiên X thêm ở `e238b74`): `curl "http://127.0.0.1:4002/cdn-cgi/local/scheduled?cron=job:ban+cu"` chỉ chạy "dọn bản cũ của đơn đã bàn giao". KHÔNG kích cả nhóm cron. Kịch bản sẽ viết: `qa-scripts/cf/thu-don-ban-cu.js` (lùi `delivered_at` của một đơn thử trong `.wrangler/state-y`, kích việc, kiểm `versions_purged_at`, `deliverables.files` và `version`, `rounds.pages`, `storage_trash`; thêm trường hợp đơn được mở lại giữa chừng và đính file chen giữa).
+2. **Lỗi ngắt kết nối ở `realtimeHub.js`**: phiên frontend đã thử trên trình duyệt thật, khách nhận đủ mã 4000 rồi 4404 hoặc 4410. Vậy hiện tượng kẹt là riêng của WebSocket trong Node 22 hoặc `wrangler dev`, ưu tiên thấp, phiên X xem. Việc của phiên Y: trong `qa-scripts/cf/thu-realtime-y.js` cho kết nối khách gửi một lệnh `deliverable:watch` trước khi thử ngắt, ghi rõ là cách tránh của kịch bản.
+3. **Chuyển nốt kịch bản cũ chưa chạy** (`t2`, `t3`, `t5` đến `t9`, `be_kiem_sua_nhanh`, `be_kiem_tim_kiem`, `be_kiem_chat_truc_tiep`, `nghe_su_kien`, `kiem_du_lieu_gop_y`) sang `qa-scripts/cf/cu/` theo đúng cách của đợt trước (giao cho tác tử phụ, kết quả ở `qa-scripts/cf/cu/ket-qua-nhom-4.md` và `ket-qua-nhom-5.md`, tôi tự chạy lại để kiểm). Rồi viết vào `qa-scripts/cf/README.md` mục "Chạy lại toàn bộ kiểm thử của đợt viết lại": mọi lệnh theo thứ tự (Postman đủ bộ, kịch bản cũ đã chuyển, đồng thời, realtime, của cả phiên X lẫn phiên Y) kèm số phép kỳ vọng. Kịch bản của phiên X: xem `docs/tien-do-x.md`.
+
+Xong từng việc thì sửa khối này. Lúc ghi khối này chưa việc nào trong ba việc bắt đầu.
+
 ### Đợt việc thứ ba của phiên điều phối (xong 19/11/2026, khoảng 00:35, trừ việc 4)
 
 Năm việc được giao: (1) chạy kịch bản cũ, (2) bắn đồng thời, (3) WebSocket thật, (4) thử `purgeDeliveredVersions`, (5) đo và giảm bước kiểm zod của ảnh trang. Kết quả:
