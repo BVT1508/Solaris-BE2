@@ -120,7 +120,7 @@ export async function submitByGuest(guest) {
             deliverableId: deliverable.id,
             after: sql`json_object(
               'deliverable', ${deliverable.id},
-              'number', ${round.number},
+              'number', CAST(${round.number} AS INTEGER),
               'feedback', (SELECT count(*) FROM feedback WHERE deliverable_id = ${deliverable.id} AND status = 'draft'),
               'reopened', (SELECT count(*) FROM feedback WHERE ${reopenedWhere}))`,
           }),
@@ -217,7 +217,7 @@ export async function approveByGuest(guest) {
             deliverableId: deliverable.id,
             after: sql`json_object(
               'deliverable', ${deliverable.id},
-              'number', ${round.number},
+              'number', CAST(${round.number} AS INTEGER),
               'confirmed', (SELECT count(*) FROM feedback WHERE ${doneWhere}),
               'remaining', (SELECT count(*) FROM feedback WHERE ${remainingWhere}))`,
           }),
@@ -335,7 +335,7 @@ export async function openNextRound(actor, deliverableId, input = {}) {
           entityId: round.id,
           orderId: d.order,
           deliverableId: d.id,
-          after: sql`json_object('deliverable', ${d.id}, 'number', ${round.number},
+          after: sql`json_object('deliverable', ${d.id}, 'number', CAST(${round.number} AS INTEGER),
             'pending', json_object('open', ${pendingCount("open")},
               'in_progress', ${pendingCount("in_progress")}, 'done', ${pendingCount("done")}))`,
         }),
