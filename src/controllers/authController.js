@@ -42,7 +42,7 @@ const loginRedirect = (c, params) => {
   return c.redirect(url.toString());
 };
 
-/** Chủ hệ thống luôn có mặt, kể cả database trống: kiểm ở request đầu tiên của mỗi isolate vào nhóm /auth. */
+/** Chủ hệ thống luôn có mặt, kể cả database trống: kiểm ở các đường đăng nhập, một lần mỗi isolate (xem routes/authRoutes.js). */
 export const ensureOwner = async (c, next) => {
   await authService.ensureOwnerOnce();
   await next();

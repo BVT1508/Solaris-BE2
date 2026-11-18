@@ -1,4 +1,5 @@
 import { run, sql } from "../db/d1.js";
+import { ensureOwner } from "../services/authService.js";
 import logger from "../utils/logger.js";
 import { now } from "../utils/time.js";
 import * as maintenanceJobs from "./maintenanceJobs.js";
@@ -35,7 +36,12 @@ async function purgeExpiredRows() {
 }
 
 const JOBS = {
-  [HOURLY]: [["dọn dòng hết hạn", purgeExpiredRows], ...storageJobs.hourlyJobs],
+  [HOURLY]: [
+    ["dọn dòng hết hạn", purgeExpiredRows],
+    // Backend cũ khôi phục chủ hệ thống mỗi lần server khởi động; Worker không có lúc khởi động nên làm ở đây và ở các đường đăng nhập.
+    ["bảo đảm chủ hệ thống", async () => (await ensureOwner(), "xong")],
+    ...storageJobs.hourlyJobs,
+  ],
   [SIX_HOURLY]: [
     ...storageJobs.sixHourlyJobs,
     ...maintenanceJobs.sixHourlyJobs,
