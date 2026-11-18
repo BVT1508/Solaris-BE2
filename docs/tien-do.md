@@ -36,7 +36,7 @@ Theo lời phiên điều phối, đã đọc `Solaris FE/docs/fe-dung-api.md` m
 - **Fallback của frontend chuyển về Worker** (`src/middleware/frontendMiddleware.js`): đường dẫn của ứng dụng nhận `index.html`, file thiếu nhận 404, `/api` và `/socket.io` không bao giờ nhận `index.html`. `bridge.js` và mọi file trong `assets/` mang `Cross-Origin-Resource-Policy: cross-origin`; `bridge.js` không cache dài.
 - **Kết nối trực tiếp**: lệnh của một kết nối xử lý đúng thứ tự gửi (chuỗi theo dõi, thôi, theo dõi của StrictMode); có `?token=` thì luôn là khách dù có cookie thành viên.
 - **Tài liệu**: `docs/hop-dong-realtime.md` trả lời đủ mục 3.11 và 3.12 của frontend (vì sao token ở query, ai gửi ping, thứ tự `ack`, cách nối lại sau mã 4000); `docs/kien-truc.md` mục 11 thêm danh sách "Điều frontend dựa vào, dễ lệch khi viết lại".
-- **Cấu hình deploy**: tên Worker là `app`, `CLIENT_ORIGINS` của bản deploy là `https://app.solaris-feedback.workers.dev`; `database_id` vẫn là mã giữ chỗ, điền ở đúng một dòng trong `wrangler.jsonc`.
+- **Cấu hình deploy**: tên Worker là `app`, `CLIENT_ORIGINS` của bản deploy là `https://app.solaris-fbs.workers.dev`; `database_id` vẫn là mã giữ chỗ, điền ở đúng một dòng trong `wrangler.jsonc`.
 - **Lệnh `npm run db:reset`** làm trống D1 cục bộ (xem "Cách chạy và thử").
 
 Không cần sửa gì ở các điểm còn lại của mục 6: id là chuỗi 24 hex ở mọi nơi, `_id` ở danh sách đăng nhập dev, phong bì, `DELETE` có body và `POST` không body, không 401 ở `/r/:token`, `GET /auth/me` ổn định giữa các lần gọi.

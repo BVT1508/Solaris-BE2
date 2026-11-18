@@ -13,3 +13,6 @@ postman/
 
 # Bản build của frontend, chép vào bằng `npm run sync-frontend`
 frontend-dist/
+
+# Cấu hình deploy sinh bởi scripts/make-deploy-config.mjs
+wrangler.deploy.jsonc

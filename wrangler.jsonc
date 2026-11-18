@@ -2,7 +2,7 @@
 // và bản build của frontend (static assets). Xem docs/kien-truc.md mục 9.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Tên Worker là "app": địa chỉ khi deploy là https://app.solaris-feedback.workers.dev
+  // Tên Worker là "app": địa chỉ khi deploy là https://app.solaris-fbs.workers.dev
   "name": "app",
   "main": "src/index.js",
   "compatibility_date": "2026-11-01",
@@ -21,8 +21,9 @@
     "run_worker_first": ["/api/*"],
   },
 
-  // database_id dưới đây là mã giữ chỗ (toàn số 0), đủ cho D1 cục bộ. Ngày deploy: chạy `wrangler d1 create solaris`,
-  // dán mã nó in ra vào ĐÚNG MỘT chỗ là dòng database_id bên dưới, rồi `wrangler d1 migrations apply DB --remote`.
+  // database_id dưới đây là mã giữ chỗ (toàn số 0), đủ cho D1 cục bộ. D1 thật tạo bằng `wrangler d1 create solaris`.
+  // KHÔNG dán mã thật vào đây (đổi mã là D1 cục bộ của mọi server dev thành file khác, mất dữ liệu thử):
+  // chạy `node scripts/make-deploy-config.mjs --d1 <mã thật>` rồi `npx wrangler deploy -c wrangler.deploy.jsonc`.
   "d1_databases": [
     {
       "binding": "DB",
@@ -84,7 +85,7 @@
     "ENVIRONMENT": "production",
     // Origin đầu tiên là gốc của link chia sẻ, đoạn nhúng bridge.js và nơi chuyển về sau đăng nhập Google:
     // phải trùng địa chỉ người dùng mở ứng dụng.
-    "CLIENT_ORIGINS": "https://app.solaris-feedback.workers.dev",
+    "CLIENT_ORIGINS": "https://app.solaris-fbs.workers.dev",
     "SESSION_HOURS": "12",
     "LOG_LEVEL": "info",
   },
