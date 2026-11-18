@@ -1,22 +1,28 @@
 import { Hono } from "hono";
 import app from "./app.js";
 import { runScheduled } from "./jobs/index.js";
+import { serveFrontend } from "./middleware/frontendMiddleware.js";
 import { connectRealtime } from "./realtime/connect.js";
 
 /**
  * Điểm vào của Worker.
- *   fetch       mọi request tới /api/* (file tĩnh của frontend không qua đây, xem "assets" trong wrangler.jsonc)
+ *   fetch       request tới /api/*, và request không khớp file tĩnh nào (xem "assets" trong wrangler.jsonc)
  *   scheduled   việc định kỳ theo Cron Triggers
  *   RealtimeHub Durable Object giữ kết nối trực tiếp của màn góp ý
  */
+const entry = new Hono();
 
 // Kết nối trực tiếp đi riêng, không qua chuỗi middleware của API: response nâng cấp WebSocket không cho sửa header.
-const realtime = new Hono();
-realtime.get("/api/v1/realtime", connectRealtime);
-realtime.all("*", (c) => app.fetch(c.req.raw, c.env, c.executionCtx));
+entry.get("/api/v1/realtime", connectRealtime);
+
+// Còn lại: đường dẫn của ứng dụng frontend thì trả index.html; mọi thứ khác (API, file thiếu) vào app của API.
+entry.all(
+  "*",
+  (c) => serveFrontend(c) || app.fetch(c.req.raw, c.env, c.executionCtx)
+);
 
 export default {
-  fetch: realtime.fetch,
+  fetch: entry.fetch,
 
   async scheduled(controller, _env, ctx) {
     ctx.waitUntil(runScheduled(controller.cron));

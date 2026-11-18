@@ -20,12 +20,14 @@ cpSync(source, target, { recursive: true });
 
 // Header cho file tĩnh (Cloudflare đọc file _headers trong thư mục assets):
 // - assets/ có mã băm trong tên nên giữ lâu; file khác (index.html, bridge.js, trang demo) Cloudflare mặc định luôn hỏi lại.
-// - bridge.js được site của khách nạp từ tên miền khác.
+// - bridge.js và thư viện chụp ảnh (trong assets/) được site của khách nạp từ tên miền khác.
 writeFileSync(
   join(target, "_headers"),
   [
     "/assets/*",
     "  Cache-Control: public, max-age=31536000, immutable",
+    // Thư viện chụp ảnh nằm trong assets/ và được bridge chèn vào site của khách (khác origin).
+    "  Cross-Origin-Resource-Policy: cross-origin",
     "",
     "/bridge.js",
     "  Cross-Origin-Resource-Policy: cross-origin",

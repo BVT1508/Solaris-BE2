@@ -48,6 +48,8 @@ export class RealtimeHub extends DurableObject {
     );
     // Đếm lệnh theo dõi của từng kết nối. Mất khi object ngủ, không sao: object chỉ ngủ khi kết nối đã im lặng.
     this.watchTimes = new Map();
+    // Hàng chờ lệnh của từng kết nối (xem webSocketMessage). Cũng chỉ sống trong lúc object thức.
+    this.queues = new Map();
   }
 
   /** Worker chuyển yêu cầu nâng cấp WebSocket đã xác thực vào đây, danh tính nằm ở tham số `identity`. */
@@ -78,7 +80,22 @@ export class RealtimeHub extends DurableObject {
 
   // ---------- Tin từ trình duyệt ----------
 
+  /**
+   * Lệnh của cùng một kết nối được xử lý lần lượt theo thứ tự gửi. Xin theo dõi phải hỏi database (chậm) còn thôi theo dõi
+   * thì không: không xếp hàng thì chuỗi "theo dõi rồi thôi ngay" (màn vừa mở đã đóng) kết thúc ở trạng thái vẫn theo dõi.
+   */
   async webSocketMessage(ws, message) {
+    const { socketId } = ws.deserializeAttachment();
+    const previous = this.queues.get(socketId) || Promise.resolve();
+    const current = previous
+      .then(() => this.handleMessage(ws, message))
+      .catch((err) => logger.error({ err }, "Lỗi khi xử lý tin của kết nối"));
+    this.queues.set(socketId, current);
+    await current;
+    if (this.queues.get(socketId) === current) this.queues.delete(socketId);
+  }
+
+  async handleMessage(ws, message) {
     if (typeof message !== "string" || message.length > MAX_MESSAGE_CHARS)
       return;
     let data;
@@ -90,7 +107,7 @@ export class RealtimeHub extends DurableObject {
     if (!data || typeof data !== "object") return;
 
     const ack = (result) =>
-      ws.send(JSON.stringify({ type: "ack", id: data.id ?? null, ...result }));
+      send(ws, JSON.stringify({ type: "ack", id: data.id ?? null, ...result }));
 
     if (data.type === "deliverable:watch") {
       let result;
@@ -168,11 +185,17 @@ export class RealtimeHub extends DurableObject {
   }
 
   webSocketClose(ws) {
-    this.watchTimes.delete(ws.deserializeAttachment()?.socketId);
+    this.forget(ws);
   }
 
   webSocketError(ws) {
-    this.watchTimes.delete(ws.deserializeAttachment()?.socketId);
+    this.forget(ws);
+  }
+
+  forget(ws) {
+    const socketId = ws.deserializeAttachment()?.socketId;
+    this.watchTimes.delete(socketId);
+    this.queues.delete(socketId);
   }
 
   // ---------- Gọi từ Worker (RPC, xem utils/realtime.js) ----------

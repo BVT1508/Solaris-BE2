@@ -2,7 +2,8 @@
 // và bản build của frontend (static assets). Xem docs/kien-truc.md mục 9.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "solaris",
+  // Tên Worker là "app": địa chỉ khi deploy là https://app.solaris-feedback.workers.dev
+  "name": "app",
   "main": "src/index.js",
   "compatibility_date": "2026-11-01",
   // nodejs_compat: dùng node:crypto (băm đồng bộ) và Buffer.
@@ -11,16 +12,17 @@
   // Máy dev: cổng 4000 và 127.0.0.1 như backend cũ, để environment "Solaris local" của Postman dùng lại được.
   "dev": { "port": 4000, "ip": "127.0.0.1" },
 
-  // Bản build của frontend (scripts/sync-frontend.mjs chép từ "../Solaris FE/dist"). Đường dẫn /api/* luôn vào Worker;
-  // đường dẫn khác tìm file tĩnh, không có thì trả index.html để React Router xử lý.
+  // Bản build của frontend (scripts/sync-frontend.mjs chép từ "../Solaris FE/dist"). File tĩnh có thật do Cloudflare phục vụ,
+  // không tốn lượt request của Worker. Đường dẫn /api/* luôn vào Worker. Đường dẫn không khớp file nào cũng vào Worker:
+  // src/middleware/frontendMiddleware.js trả index.html cho đường dẫn của ứng dụng và 404 cho file thiếu.
   "assets": {
     "directory": "./frontend-dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"],
   },
 
-  // database_id dưới đây là mã giữ chỗ, đủ cho D1 cục bộ. Ngày deploy: `wrangler d1 create solaris` rồi dán mã thật vào.
+  // database_id dưới đây là mã giữ chỗ (toàn số 0), đủ cho D1 cục bộ. Ngày deploy: chạy `wrangler d1 create solaris`,
+  // dán mã nó in ra vào ĐÚNG MỘT chỗ là dòng database_id bên dưới, rồi `wrangler d1 migrations apply DB --remote`.
   "d1_databases": [
     {
       "binding": "DB",
@@ -80,6 +82,9 @@
   "vars": {
     // "production" là mặc định an toàn: đăng nhập dev chỉ bật khi .dev.vars đặt ENVIRONMENT=development.
     "ENVIRONMENT": "production",
+    // Origin đầu tiên là gốc của link chia sẻ, đoạn nhúng bridge.js và nơi chuyển về sau đăng nhập Google:
+    // phải trùng địa chỉ người dùng mở ứng dụng.
+    "CLIENT_ORIGINS": "https://app.solaris-feedback.workers.dev",
     "SESSION_HOURS": "12",
     "LOG_LEVEL": "info",
   },
