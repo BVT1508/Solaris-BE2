@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Bàn giao (đọc mục này trước nếu vừa mất context)
 
-Cập nhật lần cuối: 19/11/2026, rạng sáng. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+Cập nhật lần cuối: 19/11/2026, sáng. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
 
 **Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
 
@@ -41,7 +41,12 @@ Các bước phiên điều phối giao lúc nửa đêm 18/11, và trạng thá
 4. [x] **Kích riêng một việc định kỳ trên máy dev** (`e238b74`): `curl "http://127.0.0.1:<cổng>/cdn-cgi/local/scheduled?cron=job:<từ khóa>"`, ví dụ `cron=job:ban+cu` chỉ chạy "dọn bản cũ của đơn đã bàn giao". Từ khóa không dấu, phải khớp đúng một tên việc; không khớp thì log liệt kê tên các việc. Chỉ có khi `ENVIRONMENT=development`.
 5. [x] **Sự kiện trực tiếp của gói X qua WebSocket thật**: `x_kiem_gop_y_team.mjs` (68 phép) có tạo, trả lời, đổi trạng thái, xác nhận, xóa, loại trừ theo `X-Socket-Id`, khách không nhận sự kiện nội bộ; `x_kiem_kho_that.mjs` (24 phép) thêm sự kiện `submitted` và `status` khi ảnh đính vào bài đã gửi.
 6. [x] Số đo thật và luật đã sửa trong `docs/kien-truc.md` mục 10 và 11.
-7. [ ] Chờ phiên điều phối: deploy bản đo mới (đã dựng sẵn từ `e238b74` ở `qa-scripts/cf/x-do-cpu/deploy-x`; nếu HEAD đã đổi thì `bash build-deploy.sh HEAD 1`) để đo `viewsnew`, `viewsold`, `zodbig`; rồi ghi số thật vào mục 10. Sau đó quyết về trần danh sách 500.
+7. [x] Phiên điều phối đã deploy bản đo `5810b35`, đo, rồi deploy lại bản sạch `671994b` (route chẩn đoán trả 404). Số thật (`cpuTime` ms): danh sách cách mới 50 bài trung vị 2; 100 bài 2; 200 bài 5 (cao nhất 9); **500 bài trung vị 7, p90 13**; cách cũ 500 bài trung vị 10, cao nhất 15; dựng bằng JavaScript 500 bài 25 tới 50; kiểm nét vẽ 2.000 điểm dưới 0,1 ms mỗi lần. Đã ghi vào `docs/kien-truc.md` mục 10. **Kết luận của phiên điều phối: không hạ trần 500, không hỏi chủ dự án về gói trả phí; việc giảm CPU xong.**
+
+Việc phiên điều phối giao sáng 19/11 (ưu tiên thấp), trạng thái ghi ở mục "Đợt 19/11" bên dưới:
+
+- Kết nối WebSocket chưa gửi lệnh nào bị ngắt bằng mã 4000 thì client của Node 22 kẹt ở `readyState` 2 (phiên Y báo ở `docs/tien-do-y.md` "Việc 3"; tái hiện bằng `node qa-scripts/cf/thu-ngat-ket-noi.js`). Xem `realtimeHub.js` có thiếu bước hoàn tất đóng không.
+- Viết `README.md` cho repo.
 
 File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng việc định kỳ), `docs/kien-truc.md`. Trước đó: `src/app.js`, `src/index.js`, `src/routes/authRoutes.js`, `src/controllers/authController.js`, `wrangler.jsonc`, `.gitignore`, `scripts/make-deploy-config.mjs`, `docs/tien-do.md`.
 
@@ -56,7 +61,12 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 - Đẩy file thẳng lên Cloudinary từ kịch bản đôi khi hết giờ kết nối; chạy lại là qua.
 - Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
 
-**Tin của phiên điều phối chưa làm xong:** chỉ còn bước 7 ở trên (chờ số đo thật). Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+**Tin của phiên điều phối chưa làm xong:** hai việc ưu tiên thấp của sáng 19/11 ở trên (xem mục "Đợt 19/11" để biết đã tới đâu). Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+
+## Đợt 19/11
+
+- [ ] Lỗi đóng WebSocket mã 4000 với kết nối chưa gửi lệnh nào: chưa xem.
+- [ ] `README.md`: chưa viết.
 
 ## Trạng thái các gói
 
