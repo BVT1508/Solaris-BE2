@@ -177,19 +177,30 @@ export const batch = async (queries) =>
  *     Hết lượt thì ném 409 "Dữ liệu vừa thay đổi. Hãy thử lại.".
  * Hàm `plan` vì vậy phải chạy lại được: lời gọi ra ngoài (kho file) đặt TRƯỚC `transact`, không đặt trong `plan`.
  * Lô rỗng (không có gì để ghi) được phép: `done` nhận mảng rỗng.
+ *
+ * Hai luật cho guard:
+ *   - Guard dựa trên dữ liệu đọc NGOÀI `plan` (ví dụ ngữ cảnh của khách do middleware nạp) phải có nhãn nằm trong `errors`:
+ *     chạy lại `plan` không đọc lại dữ liệu đó, nên guard không nhãn chỉ chạy lại vô ích rồi ra 409 chung.
+ *   - Điều kiện SQL của guard không nhãn phải trùng câu kiểm JavaScript trong `plan`. Lệch nhau thì `plan` luôn cho qua
+ *     còn guard luôn sai: thành 409 vĩnh viễn (frontend tự lưu lại khi gặp 409).
+ * Trong `done`, results[i] ứng với statements[i]: guard chèn có điều kiện làm lệch chỉ số, nên đặt câu cần đọc kết quả
+ * ở vị trí cố định (trước các guard tùy chọn) hoặc tính chỉ số từ chính mảng statements.
  */
 export async function transact(plan, { errors = {}, retries = 2 } = {}) {
   for (let attempt = 0; ; attempt += 1) {
-    const { statements = [], done } = await plan(attempt);
+    const { statements = [], done } = (await plan(attempt)) || {};
+    let results;
     try {
-      const results = statements.length ? await batch(statements) : [];
-      return done ? await done(results) : undefined;
+      results = statements.length ? await batch(statements) : [];
     } catch (err) {
       const label = guardLabelOf(err);
       if (label === null) throw err;
-      if (errors[label]) throw errors[label]();
+      if (Object.hasOwn(errors, label)) throw errors[label]();
       if (attempt >= retries) throw STALE();
+      continue;
     }
+    // Lô đã ghi xong. `done` chạy ngoài try: lỗi của nó không bao giờ bị hiểu là guard sai rồi chạy lại (ghi trùng).
+    return done ? done(results) : undefined;
   }
 }
 

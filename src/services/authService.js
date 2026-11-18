@@ -75,24 +75,36 @@ export async function ensureOwner() {
   }
   if (owner.role !== "admin" || owner.status === "suspended") {
     const status = owner.status === "suspended" ? "active" : owner.status;
-    await transact(async () => ({
-      statements: [
-        sql`UPDATE members SET role = 'admin', status = ${status}, version = version + 1, updated_at = ${now()}
+    await transact(
+      async () => ({
+        statements: [
+          // Hai isolate cùng khôi phục: bên sau thấy chủ đã là admin thì dừng, không tăng version và ghi nhật ký lần hai.
+          guard(
+            sql`SELECT 1 FROM members WHERE id = ${owner.id} AND (role <> 'admin' OR status = 'suspended')`,
+            "restored"
+          ),
+          sql`UPDATE members SET role = 'admin', status = ${status}, version = version + 1, updated_at = ${now()}
             WHERE id = ${owner.id}`,
-        // Quản trị viên thấy mọi đơn nên không nằm trong team nào: gỡ khỏi team và thôi leader ở mọi đơn.
-        sql`DELETE FROM order_members WHERE member_id = ${owner.id}`,
-        auditStatement({
-          actor: systemActor(orgId),
-          action: "member.restoreOwner",
-          entityType: "member",
-          entityId: owner.id,
-          before: { role: owner.role, status: owner.status },
-          after: { role: "admin", status },
-        }),
-      ],
-    }));
+          // Quản trị viên thấy mọi đơn nên không nằm trong team nào: gỡ khỏi team và thôi leader ở mọi đơn.
+          sql`DELETE FROM order_members WHERE member_id = ${owner.id}`,
+          auditStatement({
+            actor: systemActor(orgId),
+            action: "member.restoreOwner",
+            entityType: "member",
+            entityId: owner.id,
+            before: { role: owner.role, status: owner.status },
+            after: { role: "admin", status },
+          }),
+        ],
+      }),
+      { errors: { restored: () => new OwnerAlreadyRestored() } }
+    ).catch((err) => {
+      if (!(err instanceof OwnerAlreadyRestored)) throw err;
+    });
   }
 }
+
+class OwnerAlreadyRestored extends Error {}
 
 // Biến cấp module sống theo isolate: mỗi isolate chỉ kiểm một lần. Hai request đầu tới cùng lúc có thể cùng kiểm, không sao.
 let ownerChecked = false;
@@ -266,7 +278,7 @@ export async function authorizeDevSignIn(email) {
 export async function listDevLoginMembers() {
   return all(sql`
     SELECT id AS _id, email, name, role, status FROM members
-    WHERE status <> 'suspended' ORDER BY role, name`);
+    WHERE status <> 'suspended' ORDER BY role, name, id`);
 }
 
 // ---------- Google OAuth (authorization code + PKCE), gọi thẳng bằng fetch ----------
