@@ -1,5 +1,8 @@
 import { Hono } from "hono";
+import * as roundCtrl from "../controllers/roundController.js";
 import * as shareLinkCtrl from "../controllers/shareLinkController.js";
+import { requireDevice, resolveGuest } from "../middleware/guestMiddleware.js";
+import { guestWriteLimiter } from "../middleware/rateLimitMiddleware.js";
 import validate from "../middleware/validateMiddleware.js";
 import { tokenParams } from "../validators/common.js";
 
@@ -14,6 +17,24 @@ route.get(
   "/:token",
   validate({ params: tokenParams }),
   shareLinkCtrl.openReview
+);
+
+// "Gửi góp ý cho team" khép vòng; "Duyệt" kết thúc sản phẩm.
+route.post(
+  "/:token/submit",
+  guestWriteLimiter,
+  validate({ params: tokenParams }),
+  resolveGuest,
+  requireDevice,
+  roundCtrl.submitRound
+);
+route.post(
+  "/:token/approve",
+  guestWriteLimiter,
+  validate({ params: tokenParams }),
+  resolveGuest,
+  requireDevice,
+  roundCtrl.approveRound
 );
 
 export default route;
