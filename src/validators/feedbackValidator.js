@@ -35,14 +35,48 @@ const regionSchema = z
   });
 
 /** Nét vẽ tự do: danh sách điểm [x, y], tối đa 2.000 điểm. */
+const slowPointsSchema = z
+  .array(z.tuple([ratio, ratio]))
+  .min(2, "Nét vẽ cần ít nhất 2 điểm.")
+  .max(2000, "Nét vẽ tối đa 2.000 điểm.");
+
+const isRatio = (value) =>
+  typeof value === "number" && value >= 0 && value <= 1;
+
+/** true khi là danh sách từ 2 tới 2.000 điểm, mỗi điểm đúng hai số trong khoảng 0..1. */
+const pointsAreValid = (value) => {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 2000) {
+    return false;
+  }
+  for (let i = 0; i < value.length; i += 1) {
+    const point = value[i];
+    if (
+      !Array.isArray(point) ||
+      point.length !== 2 ||
+      !isRatio(point[0]) ||
+      !isRatio(point[1])
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * Nét vẽ 2.000 điểm mà để zod kiểm từng điểm thì tốn khoảng 5 ms CPU trên Cloudflare (nửa hạn mức của một request).
+ * Đường nhanh: một vòng lặp thường. Chỉ khi vòng lặp thấy có gì sai mới giao lại cho schema zod, để lời báo lỗi
+ * giữ nguyên như trước; dữ liệu hợp lệ không bao giờ đi đường chậm.
+ */
+const pointsSchema = z.unknown().transform((value, ctx) => {
+  if (pointsAreValid(value)) return value;
+  const result = slowPointsSchema.safeParse(value);
+  if (result.success) return result.data;
+  for (const issue of result.error.issues) ctx.addIssue({ ...issue });
+  return z.NEVER;
+});
+
 const strokeSchema = z
-  .object({
-    kind: z.literal("stroke"),
-    points: z
-      .array(z.tuple([ratio, ratio]))
-      .min(2, "Nét vẽ cần ít nhất 2 điểm.")
-      .max(2000, "Nét vẽ tối đa 2.000 điểm."),
-  })
+  .object({ kind: z.literal("stroke"), points: pointsSchema })
   .strict();
 
 const markSchema = z.discriminatedUnion("kind", [
