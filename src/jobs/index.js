@@ -1,12 +1,16 @@
 import { run, sql } from "../db/d1.js";
 import logger from "../utils/logger.js";
-import { fromNow, now } from "../utils/time.js";
+import { now } from "../utils/time.js";
+import * as maintenanceJobs from "./maintenanceJobs.js";
+import * as storageJobs from "./storageJobs.js";
 
 /**
  * Việc định kỳ (Cron Triggers, khai ở "triggers" trong wrangler.jsonc), thay cho setInterval của backend cũ.
  * Mỗi biểu thức cron ứng với một nhóm việc; mỗi lượt chạy cũng bị giới hạn 10 ms CPU và 50 lời gọi ra ngoài,
  * nên mỗi việc chỉ xử lý một lô nhỏ, còn lại để lượt sau.
- * Thử trên máy dev: `npx wrangler dev --test-scheduled` rồi mở /cdn-cgi/handler/scheduled?cron=23+*+*+*+*
+ *
+ * Các gói việc thêm việc của mình vào storageJobs.js và maintenanceJobs.js, không sửa file này.
+ * Thử trên máy dev (server đang chạy): curl "http://127.0.0.1:4000/cdn-cgi/local/scheduled?cron=23+*+*+*+*"
  */
 const HOURLY = "23 * * * *";
 const SIX_HOURLY = "41 */6 * * *";
@@ -21,7 +25,7 @@ async function purgeExpiredRows() {
   );
   // Bộ đếm hạn mức: cửa sổ dài nhất là 10 phút, giữ dư một ngày.
   const counters = await run(
-    sql`DELETE FROM rate_counters WHERE window_start < ${Date.parse(fromNow(-24 * 60 * 60 * 1000))}`
+    sql`DELETE FROM rate_counters WHERE window_start < ${Date.now() - 24 * 60 * 60 * 1000}`
   );
   return {
     sessions: sessions.changes,
@@ -31,13 +35,10 @@ async function purgeExpiredRows() {
 }
 
 const JOBS = {
-  [HOURLY]: [
-    ["dọn dòng hết hạn", purgeExpiredRows],
-    // Gói việc file thêm ở đây: dọn thùng rác kho file (storageService.emptyTrash).
-  ],
+  [HOURLY]: [["dọn dòng hết hạn", purgeExpiredRows], ...storageJobs.hourlyJobs],
   [SIX_HOURLY]: [
-    // Gói việc file thêm ở đây: dọn file tạm quá 1 ngày trên kho (storageService.purgeStalePending).
-    // Gói việc vòng review thêm ở đây: dọn bản cũ của đơn đã bàn giao quá 30 ngày (maintenanceService.purgeDeliveredVersions).
+    ...storageJobs.sixHourlyJobs,
+    ...maintenanceJobs.sixHourlyJobs,
   ],
 };
 

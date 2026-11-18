@@ -15,3 +15,10 @@ export const versionOnlySchema = z
     version: z.number().int().positive({ error: "Thiếu version." }),
   })
   .strict();
+
+/** Token của link chia sẻ trong đường dẫn công khai /r/:token: 24 byte ngẫu nhiên dạng base64url, đúng 32 ký tự. */
+export const tokenParams = z
+  .object({
+    token: z.string().regex(/^[A-Za-z0-9_-]{32}$/, "Link không hợp lệ."),
+  })
+  .strict();
