@@ -509,22 +509,23 @@ async function adoptPageShot(d, key) {
     throw new AppError("Ảnh chụp không thuộc sản phẩm này.", 400);
   }
   const provider = storage.activeProvider();
-  const info = await storage.statPending(key);
+  // MỘT lời gọi kho cho mỗi ảnh: chuyển key và nhận luôn loại, cỡ, kích thước (bản cũ hỏi rồi mới chuyển, hai lời gọi).
+  // Một vòng tối đa 30 trang, mà gói miễn phí chỉ cho 50 lời gọi ra ngoài mỗi request.
+  const finalKey = storage.pageShotKey(d.order, d.id, storage.extOfKey(key));
+  const info = await storage.adoptPending(key, finalKey);
   if (!info) throw new AppError("Chưa thấy ảnh chụp trên kho.", 400);
+  // Kiểm loại và cỡ SAU khi nhận; sai thì đưa key chính thức vào thùng rác.
   const rule = storage.ruleFor(info.contentType);
   if (!rule || rule.kind !== "image" || info.bytes > PAGE_SHOT_MAX_BYTES) {
-    await storage.trashQuietly([{ provider, key }]);
+    await storage.trashQuietly([{ provider, key: finalKey }]);
     throw new AppError(PAGE_SHOT_ERROR, 400);
   }
-  const measured = await storage.measurePending(key, rule, info);
-  const finalKey = storage.pageShotKey(d.order, d.id, rule.ext);
-  await storage.promote(key, finalKey);
   return {
     provider,
     key: finalKey,
     contentType: info.contentType,
     bytes: info.bytes,
-    ...measured,
+    ...info.measured,
   };
 }
 
