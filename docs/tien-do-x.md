@@ -2,6 +2,50 @@
 
 Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs/kien-truc.md` mục 12 và giữ các file dùng chung. Phần nền ghi ở `docs/tien-do.md`.
 
+## Bàn giao (đọc mục này trước nếu vừa mất context)
+
+Cập nhật lần cuối: 18/11/2026, khoảng 23 giờ 30. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+
+**Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
+
+**Đã xong, đã commit** (không push):
+
+| Việc                                            | Commit                                               |
+| ----------------------------------------------- | ---------------------------------------------------- |
+| Khung, nền, lát đăng nhập, realtime, tài liệu   | `c0e9e58` tới `db3d17d`                              |
+| X1 thành viên                                   | `1bdfab4`                                            |
+| X2 sản phẩm, kho Cloudinary qua HTTP            | `394e0d3`, `a667d76` (nhận ảnh bằng một lời gọi kho) |
+| X3, X4 góp ý khách và team                      | `0f9ad34`, `b9d08c2`                                 |
+| Sửa nền theo bản soát (điểm 2, 11, 17, 18)      | `6030a59`                                            |
+| Tài liệu theo bản soát và kết quả đo Cloudinary | `8a05c8e`, `b1e60c4`                                 |
+| Ghi chú tiến độ                                 | `48717a6` tới commit chứa mục này                    |
+
+Mọi điểm của `docs/soat-thiet-ke.md` giao cho X đã xử lý (bảng ở dưới). Cả bộ Postman: 406/406 request, 1377/1377 phép kiểm (lượt `x-chot-2`).
+
+**Đang dở: giảm thời gian CPU** (phiên điều phối giao tối 18/11, ưu tiên cao). Bối cảnh: bản nền `db3d17d` đã được phiên điều phối deploy lên Cloudflare thật, Worker `app`, địa chỉ `https://app.solaris-fbs.workers.dev` (tên con là `solaris-fbs`, KHÔNG phải `solaris-feedback`), D1 `solaris` id `c7e83a5a-87eb-417f-9fd2-5a1d05833a11`. Số đo của phiên điều phối (`cpuTime` từ `wrangler tail app --format json`): `/auth/me` không cookie trung vị 1 ms nhưng request đầu của isolate mới 12 tới 19 ms; có cookie giả (một truy vấn D1) trung vị 5 ms, cao nhất 8 ms. Trần gói miễn phí là 10 ms.
+
+Các bước, theo thứ tự (đánh dấu khi xong):
+
+1. [ ] Sửa địa chỉ deploy trong repo: `wrangler.jsonc` (`vars.CLIENT_ORIGINS` và chú thích đầu file), `docs/kien-truc.md` dòng "Một Worker", `docs/tien-do.md` dòng "Cấu hình deploy": đổi `solaris-feedback` thành `solaris-fbs`.
+2. [ ] Tách cấu hình deploy khỏi cấu hình dev: KHÔNG đổi `database_id` giữ chỗ trong `wrangler.jsonc` (đổi là mọi server dev mất dữ liệu D1 cục bộ). Ý định: script `scripts/make-deploy-config.mjs` sinh `wrangler.deploy.jsonc` (không commit) từ `wrangler.jsonc` với id thật, deploy bằng `wrangler deploy -c wrangler.deploy.jsonc`.
+3. [ ] Deploy một bản ĐO để tìm chỗ tốn CPU. Cách deploy được phép (theo phiên điều phối): `git archive <commit>` ra thư mục tạm, chép `frontend-dist` vào, trong bản tạm đổi `database_id` thành id thật và `CLIENT_ORIGINS` thành địa chỉ thật, `npm ci`, rồi `CI=true npx wrangler deploy --secrets-file <file chỉ có dòng OWNER_EMAIL lấy từ .dev.vars, không in ra>`. Không tạo tài nguyên nào khác, không xóa gì, không bật đăng nhập dev ở bản deploy. Bản đo chỉ khác bản commit ở một route chẩn đoán thêm trong thư mục tạm (đường dẫn có mã ngẫu nhiên), chạy lặp từng thứ nghi ngờ: băm `node:crypto`, một truy vấn D1, ba truy vấn nối tiếp so với một lô ba câu, lời gọi Rate Limiting binding, zod, dựng JSON lớn, ký URL Cloudinary, chuỗi middleware. Đo bằng `npx wrangler tail app --format json` chạy nền trong lúc gửi request, xong thì tắt tiến trình tail.
+4. [ ] Giảm theo kết quả đo. Nghi phạm: mỗi lượt đi về tới D1 tốn CPU (gom đọc bằng `readAll`, ghi bằng lô); bộ định tuyến Hono dựng ở request đầu; `ensureOwner` ở request lạnh; hai app Hono lồng nhau (`src/index.js` gọi `app.fetch`); log mỗi request; 12 header bảo mật mỗi response.
+5. [ ] Deploy lại bản đo, đo sau khi sửa; cuối cùng deploy bản sạch từ commit (không có route chẩn đoán).
+6. [ ] Ghi số đo trước và sau vào `docs/kien-truc.md` mục 10, luật viết code giữ CPU thấp vào mục 11. Sửa file dùng chung thì commit riêng và nêu trong báo cáo cho phiên điều phối.
+
+**Lệnh và cổng của tôi.** Server thử: `npx wrangler dev --port 4001 --persist-to .wrangler/state-x` (cổng 4000 và `.wrangler/state` để chấm tổng; 4002 và `state-y` của phiên Y). Làm trống: `powershell -ExecutionPolicy Bypass -File "D:\Work\New folder\qa-scripts\cf\x_server.ps1" reset`. Chấm: trong `qa-scripts\cf`, `node chay-postman.js --base-url http://127.0.0.1:4001/api/v1 [-t <thư mục>] --nhan x-<nhãn>`. Kịch bản riêng: `x_kiem_gop_y_team.mjs` (68 phép), `x_kiem_kho_that.mjs` (18, Cloudinary thật), `x_doi_chieu_cloudinary.mjs` (30), `x_do_rename_cloudinary.mjs`. Commit: `git add <file mới>` rồi `git commit -m "<lời>" -- <đường dẫn>` để không cuốn theo file phiên Y đang sửa.
+
+**Bẫy đã gặp trong đợt X** (thêm vào các bẫy ở `docs/tien-do.md`):
+
+- Ghi file nguồn bằng công cụ ghi file, không qua heredoc của shell (vỡ cú pháp với nháy lồng).
+- `wrangler dev` nạp lại khi phiên Y lưu file: request đang chạy nhận 503 "Your worker restarted mid-request". Khi chấm, đếm dòng `Reloading local server` trong `.wrangler/dev-x.log`; khác 0 thì chạy lại.
+- `npm run lint` có thể đỏ vì file phiên Y đang viết dở; lint riêng file của mình bằng `npx eslint <đường dẫn>`.
+- Prettier phải chạy trên file của mình trước khi commit (`npx prettier --write <đường dẫn>`).
+- Đẩy file thẳng lên Cloudinary từ kịch bản đôi khi hết giờ kết nối; chạy lại là qua.
+- Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
+
+**Tin của phiên điều phối chưa làm xong:** chỉ còn việc giảm CPU ở trên. Việc còn mở cho phiên Y (đã ghi ở mục "Điểm lệch"): `adoptPageShot` nên đổi sang `storage.adoptPending`.
+
 ## Trạng thái các gói
 
 Cả bốn gói xong. Lượt chạy cả bộ chốt (`qa-scripts/cf/ket-qua/2026-11-18_*_x-chot-2`, D1 trống, server của phiên X ở cổng 4001, code trên đĩa lúc 23 giờ 18/11 gồm commit `b1e60c4` cộng các file phiên Y đang sửa dở, server không nạp lại lần nào trong lượt chạy): **406/406 request, 1377/1377 phép kiểm, 0 lỗi, 0 thiếu**, bằng đúng số gốc của backend cũ. Lượt ngay trước đó (`..._x-chot`) có một request nhận 503 "Your worker restarted mid-request" vì `wrangler dev` nạp lại code khi phiên Y lưu file giữa lượt chạy, kéo theo 5 phép kiểm trượt ở nhóm 07: không phải lỗi code. Khi chấm, đếm dòng `Reloading local server` trong log của server; khác 0 thì chạy lại.
