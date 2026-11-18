@@ -24,15 +24,14 @@ Kịch bản để ở `D:\Work\New folder\qa-scripts\cf\` (tiền tố `x_`):
 - `x_kiem_gop_y_team.mjs`: 68 phép kiểm, đạt cả 68 (chạy lại sau khi gói Y4 vào, vẫn 68). Gọi API thật trên cổng 4001, kèm ba kết nối WebSocket thật (hai tab team, một khách nối bằng token thật). Gồm: team tạo ghi chú và bài cho khách, gửi lại cùng `clientId`, lọc danh sách, giao việc, `version` cũ, người không gán được, việc của tôi, trả lời hai phía, khách tạo, sửa, xóa nháp, số thứ tự không cấp lại, kiểm khóa nhúng, xác nhận và từ chối, luật xóa, nhật ký hoạt động có đủ việc về góp ý. Về kết nối trực tiếp: khách nối bằng token thật; `feedback:event` tới team và khách; ghi chú nội bộ không tới khách; phía khách `actor` chỉ có `kind`; tab gây ra thay đổi không nhận lại sự kiện của mình (cả team lẫn khách).
 - `x_doi_chieu_cloudinary.mjs`: so phần ký viết lại (`src/services/storage/cloudinarySign.js`) với SDK Cloudinary thật của backend cũ, khóa giả, không gọi mạng. 30 trường hợp (URL gốc bốn đuôi, ảnh nhỏ, ảnh trang PDF, chữ ký tham số upload, đổi tên, xóa), khớp cả 30.
 - Upload ba bước với Cloudinary thật (Postman nhóm 10): xin chữ ký, đẩy thẳng lên Cloudinary, đính (hỏi kho, đổi tên), xem ảnh qua URL ký, gỡ file. Sau khi gỡ, bảng `storage_trash` về 0 dòng và log không có cảnh báo: xóa theo lô qua Admin API chạy được.
+- `x_kiem_kho_that.mjs`: 18 phép kiểm với Cloudinary thật, đạt cả 18. Ảnh chụp của khách: xin chỗ, đẩy thẳng, lưu góp ý trước rồi đính ảnh sau (kích thước do kho đo, `rect`, không tăng `version`), gọi lại an toàn, đường cũ gửi `screenshotKey` lúc tạo, key đã dùng thì 400, URL ký và ảnh nhỏ đọc được, xóa nháp có ảnh. PDF của sản phẩm `document`: xin chỗ, đẩy, đính (2 trang, 2 ảnh trang JPG đọc được), `version` cũ nhận 409 trước khi đụng kho, gỡ file chưa gửi khách thì xóa hẳn. Log không có lỗi kho.
 - Cron của kho gọi tay trên máy dev: dọn file tạm (0 file quá hạn), dọn thùng rác. Chạy không lỗi.
 - `x_server.ps1`: tắt và làm trống server thử của phiên X (cổng 4001, `.wrangler/state-x`).
 
 ## Chưa thử
 
-- Ảnh chụp màn hình của khách với Cloudinary thật (`screenshotKey`, `PUT .../screenshot`): nhóm 13 qua nhưng cần đối chiếu xem nhóm đó có đẩy ảnh thật không; đường code dùng chung `statPending` và `promote` với upload file đã chạy thật.
 - Hạn mức: 300 góp ý mỗi link mỗi vòng (429), 60 lần xin chỗ đẩy ảnh mỗi link trong 10 phút (máy dev nới gấp 10), luồng 200 trả lời.
 - Đồng thời: hai request cùng `clientId` cùng lúc, tạo nháp đúng lúc vòng khép, hai người xử lý một bài. Guard đã có nhưng chưa bắn song song.
-- PDF (sản phẩm `document`) với Cloudinary thật: số trang lấy từ `stat` có `pages=true`; Postman 04 có dùng PDF hay không chưa đối chiếu.
 - Mọi thứ trên Cloudflare thật.
 
 ## Điểm lệch so với thiết kế, và quyết định khi làm
