@@ -92,6 +92,18 @@ export const measurePending = (key, rule, info) =>
 export const promote = (fromKey, toKey) =>
   guarded("promote", () => active.promote(fromKey, toKey));
 
+/**
+ * Nhận một ẢNH tạm (ảnh chụp màn hình, ảnh chụp trang) bằng MỘT lời gọi kho: chuyển sang key chính thức và trả luôn
+ * { contentType, bytes, measured: { width, height } }; null khi file tạm không có. Nơi gọi kiểm loại và cỡ SAU khi nhận,
+ * sai thì đưa key chính thức vào thùng rác. Dùng thay cho statPending + promote (hai lời gọi) khi nhận nhiều ảnh trong
+ * một request: gói miễn phí chỉ cho 50 lời gọi ra ngoài mỗi request. PDF không dùng được (kho không trả số trang).
+ */
+export const adoptPending = (fromKey, toKey) =>
+  guarded("adopt", () => active.adopt(fromKey, toKey));
+
+/** Đuôi của một key ("png", "jpg", "webp", "pdf"). */
+export const extOfKey = (key) => key.slice(key.lastIndexOf(".") + 1);
+
 export const activeProvider = () => active.name;
 
 /** URL đọc cho một file đã lưu. null khi kho của file đó không còn được cấu hình. Không gọi mạng. */

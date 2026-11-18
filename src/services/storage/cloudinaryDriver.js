@@ -146,11 +146,27 @@ async function measure(key, rule, info) {
 
 /** Đổi tên trên Cloudinary; bản tạm biến mất luôn. */
 async function promote(fromKey, toKey) {
-  await uploadApi("rename", {
-    from_public_id: publicId(fromKey),
-    to_public_id: publicId(toKey),
-    type: TYPE,
-  });
+  return toInfo(
+    await uploadApi("rename", {
+      from_public_id: publicId(fromKey),
+      to_public_id: publicId(toKey),
+      type: TYPE,
+    })
+  );
+}
+
+/**
+ * Nhận một ẢNH tạm bằng đúng một lời gọi: đổi tên, và dùng luôn thông tin Cloudinary trả về (loại, dung lượng, kích thước).
+ * null khi file tạm không có. Đã thử với Cloudinary thật ngày 18/11/2026: rename trả format, bytes, width, height;
+ * KHÔNG trả số trang của PDF, nên PDF vẫn phải đi đường stat rồi promote.
+ */
+async function adopt(fromKey, toKey) {
+  try {
+    return await promote(fromKey, toKey);
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
 }
 
 // Chữ ký của một URL chỉ phụ thuộc key và phép biến đổi, không đổi theo thời gian: nhớ lại trong isolate
@@ -241,6 +257,7 @@ export default {
   stat,
   measure,
   promote,
+  adopt,
   readUrl,
   thumbUrl,
   pageUrls,

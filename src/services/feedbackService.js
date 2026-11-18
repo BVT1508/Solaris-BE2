@@ -357,26 +357,29 @@ async function adoptScreenshot(deliverable, key) {
     throw new AppError("Ảnh chụp không thuộc sản phẩm này.", 400);
   }
   const provider = storage.activeProvider();
-  const info = await storage.statPending(key);
+  // Một lời gọi kho: chuyển key và nhận luôn loại, cỡ, kích thước (bản cũ hỏi rồi mới chuyển, hai lời gọi).
+  const finalKey = storage.shotKey(
+    deliverable.order,
+    deliverable.id,
+    storage.extOfKey(key)
+  );
+  const info = await storage.adoptPending(key, finalKey);
   if (!info) throw new AppError(SHOT_MISSING, 400);
 
   const rule = storage.ruleFor(info.contentType);
   if (!rule || rule.kind !== "image" || info.bytes > SHOT_MAX_BYTES) {
-    await storage.trashQuietly([{ provider, key }]);
+    await storage.trashQuietly([{ provider, key: finalKey }]);
     throw new AppError(
       "Ảnh chụp phải là PNG, JPG hoặc WebP, tối đa 5 MB.",
       400
     );
   }
-  const measured = await storage.measurePending(key, rule, info);
-  const finalKey = storage.shotKey(deliverable.order, deliverable.id, rule.ext);
-  await storage.promote(key, finalKey);
   return {
     provider,
     key: finalKey,
     contentType: info.contentType,
     bytes: info.bytes,
-    ...measured,
+    ...info.measured,
   };
 }
 
