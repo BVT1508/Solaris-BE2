@@ -12,6 +12,7 @@
     "predev": "node scripts/prepare-dev.mjs",
     "dev": "wrangler dev",
     "db:migrate": "wrangler d1 migrations apply DB --local",
+    "db:reset": "node scripts/reset-local-db.mjs",
     "sync-frontend": "node scripts/sync-frontend.mjs",
     "lint": "eslint .",
     "format": "prettier --write ."
