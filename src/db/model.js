@@ -10,6 +10,9 @@ import { sql } from "./d1.js";
  *   Member.insert(object)      mảnh sql INSERT đủ các thuộc tính được truyền (undefined thì bỏ qua, để cột lấy DEFAULT)
  *   Member.set(changes)        mảnh sql "name = ?, role = ?" cho câu UPDATE
  *   Member.col("orgId")        tên cột, khi cần dựng điều kiện động
+ *
+ * Giá trị truyền cho insert và set có thể là một mảnh sql (truy vấn con, biểu thức) thay cho dữ liệu:
+ *   Feedback.insert({ ..., seq: sql`(SELECT feedback_seq FROM deliverables WHERE id = ${deliverableId})` })
  */
 export const json = (column) => ({ column, type: "json" });
 export const bool = (column) => ({ column, type: "bool" });
@@ -30,6 +33,8 @@ export function defineModel(table, fields) {
   };
 
   const encode = (def, value) => {
+    // Mảnh sql thì ghép nguyên, ví dụ seq: sql`(SELECT feedback_seq FROM deliverables WHERE id = ${id})`.
+    if (sql.is(value)) return value;
     if (value === null || value === undefined) return null;
     if (def.type === "json") return JSON.stringify(value);
     if (def.type === "bool") return value ? 1 : 0;

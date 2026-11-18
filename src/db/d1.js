@@ -58,6 +58,9 @@ export function sql(strings, ...values) {
  */
 sql.raw = (text) => new Sql(text, []);
 
+/** true khi giá trị là một mảnh sql (để phân biệt với dữ liệu thường). */
+sql.is = (value) => value instanceof Sql;
+
 /** Ghép nhiều mảnh bằng một dấu phân cách (mặc định dấu phẩy). */
 sql.join = (parts, separator = ", ") => {
   const out = new Sql("", []);
