@@ -15,6 +15,7 @@ if (!existsSync(join(dist, "index.html"))) {
     '<!doctype html><meta charset="utf-8"><title>Solaris</title>' +
       "<p>Chưa có bản build của frontend. Chạy <code>npm run sync-frontend</code>.</p>\n"
   );
+  writeFileSync(join(dist, "robots.txt"), "User-agent: *\nDisallow: /\n");
   console.log("Đã tạo frontend-dist/index.html giữ chỗ.");
 }
 

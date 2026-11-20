@@ -12,13 +12,19 @@
   // Máy dev: cổng 4000 và 127.0.0.1 như backend cũ, để environment "Solaris local" của Postman dùng lại được.
   "dev": { "port": 4000, "ip": "127.0.0.1" },
 
-  // Bản build của frontend (scripts/sync-frontend.mjs chép từ "../Solaris FE/dist"). File tĩnh có thật do Cloudflare phục vụ,
-  // không tốn lượt request của Worker. Đường dẫn /api/* luôn vào Worker. Đường dẫn không khớp file nào cũng vào Worker:
-  // src/middleware/frontendMiddleware.js trả index.html cho đường dẫn của ứng dụng và 404 cho file thiếu.
+  // Bản build của frontend (scripts/sync-frontend.mjs chép từ "../Solaris FE/dist").
+  // Worker CHỈ chạy cho /api và /api/*. Mọi đường dẫn khác do tầng file tĩnh của Cloudflare tự trả, không gọi Worker và
+  // không tính vào hạn mức request: file có thật thì trả file, còn lại (đường dẫn của ứng dụng như /orders/123, và cả đường
+  // bot dò quét như /wp-login.php, /.env) nhận index.html. Đây là lớp chống bot làm hao request: địa chỉ workers.dev không
+  // có tường lửa, nên cách duy nhất không mất request là không để Worker chạy.
+  // Đánh đổi đã chấp nhận: file thiếu (ví dụ một gói JS cũ sau lần deploy) nhận index.html thay cho 404.
+  // run_worker_first dạng mảng cũng tắt luật "chỉ request điều hướng mới nhận index.html", nên bot không gửi header của
+  // trình duyệt cũng không lọt vào Worker (đã thử trên wrangler dev; tài liệu của Cloudflare chỗ này không nhất quán).
   "assets": {
     "directory": "./frontend-dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"],
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"],
   },
 
   // database_id dưới đây là mã giữ chỗ (toàn số 0), đủ cho D1 cục bộ. D1 thật tạo bằng `wrangler d1 create solaris`.
@@ -93,6 +99,8 @@
     "USAGE_LIMIT_REQUESTS": "100000",
     "USAGE_LIMIT_ROWS_READ": "5000000",
     "USAGE_LIMIT_ROWS_WRITTEN": "100000",
+    // Một chỉ số đạt chừng này phần trăm thì API tạm ngừng (trả 503 "quota_paused") tới 00:00 UTC.
+    "USAGE_PAUSE_PERCENT": "97",
   },
 
   "observability": { "enabled": true },

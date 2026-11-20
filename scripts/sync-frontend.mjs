@@ -24,6 +24,10 @@ cpSync(source, target, { recursive: true });
 writeFileSync(
   join(target, "_headers"),
   [
+    // Ứng dụng nội bộ: không cho công cụ tìm kiếm lập chỉ mục bất cứ trang nào.
+    "/*",
+    "  X-Robots-Tag: noindex, nofollow",
+    "",
     "/assets/*",
     "  Cache-Control: public, max-age=31536000, immutable",
     // Thư viện chụp ảnh nằm trong assets/ và được bridge chèn vào site của khách (khác origin).
@@ -34,5 +38,9 @@ writeFileSync(
     "",
   ].join("\n")
 );
+
+// robots.txt cấm thu thập toàn bộ: bộ thu thập tử tế sẽ không quét (bot xấu thì bỏ qua file này). Là file tĩnh nên
+// Cloudflare tự trả, không gọi Worker. Ghi đè nếu bản build của frontend có sẵn file cùng tên.
+writeFileSync(join(target, "robots.txt"), "User-agent: *\nDisallow: /\n");
 
 console.log(`Đã chép ${source} vào frontend-dist.`);

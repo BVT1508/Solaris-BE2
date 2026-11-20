@@ -7,10 +7,10 @@ const HAS_EXTENSION = /\.[^/]+$/;
  * Đường dẫn của ứng dụng frontend (không khớp file tĩnh nào) trả index.html để React Router xử lý, như
  * middleware/frontendMiddleware.js của backend cũ. Trả null khi request không phải của frontend, để nơi gọi trả 404 JSON.
  *
- * File tĩnh có thật (index.html, assets/, bridge.js, demo-site/) do Cloudflare phục vụ trước khi tới Worker; hàm này chỉ
- * thấy những đường dẫn KHÔNG khớp file nào. Không dùng chế độ "single-page-application" của Cloudflare vì chế độ đó trả
- * index.html cho cả file thiếu (ví dụ một gói JS cũ sau lần deploy): trình duyệt nhận HTML thay cho 404 và báo lỗi kiểu file.
- * Ở đây đường dẫn có đuôi file thì để 404; chỉ GET và HEAD; /api và /socket.io không bao giờ nhận index.html.
+ * Từ 21/11/2026 đây chỉ còn là lưới đỡ: wrangler.jsonc để tầng file tĩnh của Cloudflare tự trả index.html cho mọi đường
+ * dẫn ngoài /api (chế độ "single-page-application"), nên bình thường Worker không còn thấy các đường dẫn này (để request
+ * của bot dò quét không tính vào hạn mức). Hàm này chỉ chạy nếu cấu hình assets bị đổi lại.
+ * Đường dẫn có đuôi file thì để 404; chỉ GET và HEAD; /api và /socket.io không bao giờ nhận index.html.
  */
 export function serveFrontend(c) {
   const { pathname } = new URL(c.req.url);
