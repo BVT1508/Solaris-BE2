@@ -2,6 +2,8 @@ import app from "./app.js";
 import { countRequest } from "./db/usageCounter.js";
 import { runScheduled } from "./jobs/index.js";
 import { scheduleUsageFlush } from "./services/usageService.js";
+// Làm nóng lúc nạp module: chạy thử các request mẫu qua cả app trước khi nhận request thật (xem warmup.js).
+import "./warmup.js";
 
 /**
  * Điểm vào của Worker.
