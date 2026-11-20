@@ -75,6 +75,21 @@ Việc deploy do chủ dự án (hoặc phiên được giao) làm, sau khi `wra
 
 Xem log và thời gian CPU của bản đang chạy: `npx wrangler tail app --format json`.
 
+## Nhúng script vào website
+
+Site web bàn giao cho khách phải mang đoạn script `bridge.js` thì khách mới ghim góp ý lên từng phần tử của trang được. Có hai cách, dùng song song được:
+
+- **Khóa chung của tổ chức (nên dùng):** dán MỘT lần đoạn script ở màn khóa nhúng (`GET /api/v1/organization/embed`) vào bộ khung website của team. Mọi site dựng từ bộ khung đó tự được nhận, cho mọi sản phẩm web, không phải chép lại ở mỗi dự án.
+- **Khóa riêng của từng sản phẩm:** đoạn script hiện ở trang sản phẩm, như trước nay. Site nào đã nhúng kiểu này vẫn chạy y như cũ.
+
+Điều cần biết về khóa chung:
+
+- Site nào mang khóa chung cũng cho phép Solaris của tổ chức điều khiển phần ghim góp ý trên site đó, ở mọi sản phẩm của tổ chức. Vì đó là site do chính team làm nên chấp nhận được; đừng dán khóa chung vào site không phải của team.
+- Quản trị viên, quản lý và nhân viên xem được khóa; người chỉ xem thì không. Khóa không bao giờ đi ra đường của khách: màn review của khách chỉ hỏi server "khóa này đúng không" và nhận đúng hay sai.
+- Chỉ quản trị viên đổi được khóa (`POST /api/v1/organization/embed/rotate`). Đổi là khóa cũ hết hiệu lực ngay: mọi site đang nhúng khóa chung phải dán lại đoạn script mới. Chỉ đổi khi nghi khóa bị lộ.
+
+Hợp đồng API: [docs/api-bo-sung.md](docs/api-bo-sung.md). Cột mới tạo bằng migration `0005_org_embed_key.sql`.
+
 ## Giới hạn gói miễn phí
 
 Hệ thống được viết để chạy trong gói miễn phí của Cloudflare:

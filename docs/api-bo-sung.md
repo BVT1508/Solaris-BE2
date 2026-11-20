@@ -193,3 +193,53 @@ Ghi chú cho frontend:
 - Tổng `member + guest + anonymous` có thể thấp hơn `requests` một chút: request đang xử lý được đếm vào `requests` ngay lúc vào, còn loại thì chỉ biết lúc trả lời xong.
 - Dữ liệu theo giờ giữ 14 ngày, theo ngày và cảnh báo giữ 400 ngày.
 - Khi D1 đã hết hạn mức đọc thì chính route này trả 503 `quota_paused` (không đọc được bảng đếm). Khi hết hạn mức request thì Cloudflare chặn trước khi tới Worker.
+
+## Khóa nhúng chung của tổ chức
+
+"Nhúng script một lần, dùng cho mọi dự án": ngoài khóa riêng của từng sản phẩm web (`sdkKey`), mỗi tổ chức có MỘT khóa nhúng chung. Dán đoạn script mang khóa này vào bộ khung website của team thì site nào dựng từ bộ khung đó cũng được nhận, cho mọi sản phẩm web của tổ chức. Đoạn script theo từng sản phẩm vẫn chạy như cũ.
+
+### GET /api/v1/organization/embed
+
+- Quyền: quản trị viên, quản lý, nhân viên. Người chỉ xem: 403 "Bạn không có quyền làm việc này.". Chưa đăng nhập: 401.
+- Không có tham số. Tổ chức chưa có khóa thì khóa được sinh ngay ở lần gọi đầu tiên (nhiều lời gọi cùng lúc vẫn nhận cùng một khóa).
+
+Trả 200:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "embed": {
+      "key": "0123456789abcdef0123456789abcdef",
+      "snippet": "<script src=\"https://app.solaris-fbs.workers.dev/bridge.js\" data-key=\"0123456789abcdef0123456789abcdef\" async></script>",
+      "rotatedAt": null
+    }
+  }
+}
+```
+
+| Trường      | Ý nghĩa                                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `key`       | Khóa nhúng chung: 32 ký tự hex thường, cùng dạng với `sdkKey` của sản phẩm.                                                |
+| `snippet`   | Đoạn script để dán vào bộ khung website, đã điền sẵn địa chỉ `bridge.js` và khóa. Hiển thị nguyên văn cho người dùng chép. |
+| `rotatedAt` | Lần gần nhất quản trị viên đổi khóa (chuỗi ISO), hoặc `null` nếu chưa đổi lần nào.                                         |
+
+### POST /api/v1/organization/embed/rotate
+
+- Quyền: chỉ quản trị viên (vai trò khác 403). Không cần body.
+- Sinh khóa mới. **Khóa cũ hết hiệu lực ngay**: mọi site đang nhúng khóa chung phải dán lại đoạn script mới; cho tới lúc đó màn review coi các site ấy như chưa nhúng. Đoạn script theo từng sản phẩm không bị ảnh hưởng. Việc đổi được ghi nhật ký.
+- Trả 200, cùng hình dạng với `GET` ở trên, `rotatedAt` là lúc vừa đổi.
+
+### Kiểm khóa của site (hành vi đổi, đường dẫn và hình dạng giữ nguyên)
+
+`POST /api/v1/deliverables/:id/bridge-check` và `POST /api/v1/r/:token/bridge-check`, body `{ "sdkKey": "<32 hex>" }`, trả `{ "status": "success", "data": { "valid": true | false } }` như trước. Khóa gửi lên nay hợp lệ khi trùng **khóa riêng của sản phẩm hoặc khóa nhúng chung của tổ chức**. Frontend không phải đổi gì ở chỗ kiểm: bridge gửi khóa nào thì chuyển khóa đó lên như cũ.
+
+### Sản phẩm web: thêm `bridgeKeyKind`
+
+Object sản phẩm (mọi nơi trả sản phẩm cho team) có thêm một trường đứng sau `bridgeSeenAt`:
+
+| Trường          | Ý nghĩa                                                                                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridgeKeyKind` | Lần gần nhất site được thấy (`bridgeSeenAt`) là qua khóa nào: `"deliverable"` (khóa riêng của sản phẩm), `"organization"` (khóa chung), hoặc `null` khi site chưa từng được thấy. |
+
+Đường của khách (`/api/v1/r/...`) không trả `sdkKey`, khóa chung hay `bridgeKeyKind`: khách chỉ nhận đúng hay sai khi hỏi khóa.

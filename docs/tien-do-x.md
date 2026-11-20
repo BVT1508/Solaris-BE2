@@ -63,6 +63,25 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 
 **Tin của phiên điều phối chưa làm xong:** không còn. Việc mới nhất là đợt 21/11 (đếm mức dùng và cảnh báo), đã xong phần code và thử trên máy dev, chờ phiên điều phối áp migration `0002` và deploy; xem mục "Đợt 21/11". Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
 
+## Đợt 21/11 (khóa nhúng chung): nhúng script một lần, dùng cho mọi dự án
+
+Phiên điều phối giao, chủ dự án đã duyệt. Trước đó phiên điều phối báo: mọi thứ tới `cb8cd6c` đã lên bản chính (tạm ngừng kín sau 35 giây trên bản thử, `paused` đếm riêng); việc tìm nguyên nhân request đầu của tiến trình **tạm gác** (3% vượt 10 ms coi là chấp nhận được).
+
+- [x] Migration `0005_org_embed_key.sql`: `organizations.embed_key`, `embed_key_rotated_at`; `deliverables.bridge_key_kind`.
+- [x] `src/services/organizationService.js` (`getEmbed` sinh khóa ở lần đọc đầu bằng câu ghi có điều kiện; `rotateEmbed` kèm nhật ký), `organizationController.js`, `organizationRoutes.js`, gắn ở `/organization` trong `routes/index.js`.
+- [x] `matchSdkKey` trong `feedbackService.js`: hợp lệ khi trùng khóa riêng của sản phẩm hoặc khóa chung của tổ chức; ghi `bridge_key_kind` cùng lúc với `bridge_seen_at`.
+- [x] Sản phẩm trả thêm `bridgeKeyKind` (`deliverableService.toPublicDeliverable`); model thêm cột (`models/index.js`).
+- [x] Bản làm nóng ghi lại (`npm run warmup:record`) vì dòng `deliverables` có thêm cột.
+- [x] Tài liệu: `docs/api-bo-sung.md` (hợp đồng cho frontend), `README.md` (mục "Nhúng script vào website"), `docs/kien-truc.md` (bảng model, mục 11).
+
+**Tên chính xác cho phiên frontend** (giữ đúng đề xuất của phiên điều phối): `GET /api/v1/organization/embed` và `POST /api/v1/organization/embed/rotate`, trả `data.embed = { key, snippet, rotatedAt }`; sản phẩm thêm `bridgeKeyKind` (`"deliverable"`, `"organization"` hoặc `null`). Đường kiểm khóa không đổi (vẫn gửi `sdkKey`).
+
+Đã thử trên **máy dev**: `x_kiem_khoa_nhung.mjs` 23/23; cả bộ Postman trên D1 trống 406 request 1377/1377 (`ket-qua/2026-11-21_033300_x-khoa-nhung`), server không nạp lại; `x_kiem_gop_y_team` 68/68; `cu/be_kiem_sua_nhanh.js` 32/32; lint, prettier, `warmup:check` sạch. **Chưa thử trên Cloudflare thật.**
+
+Phiên điều phối cần làm: áp `0005_org_embed_key.sql` lên cả hai D1 TRƯỚC khi deploy (thiếu cột thì mọi lần kiểm khóa của site và mọi lần đọc sản phẩm lỗi).
+
+File dùng chung đã sửa: `src/routes/index.js`, `src/models/index.js`; file của gói X: `feedbackService.js`, `deliverableService.js`.
+
 ## Đợt 21/11 (sửa sau khi thử thật): tạm ngừng lọt giữa các tiến trình
 
 Phiên điều phối thử `a5be6d2` trên bản thử: trang hạ tầng và lớp chống bot đạt 13/13 (40 lượt dò kiểu bot không gọi Worker, `robots.txt` đúng, dòng `warmup` báo 13/13). **Lỗi**: tạm ngừng chỉ có hiệu lực ở tiến trình đã tự biết số; 20 lần `GET /orders` tuần tự đều 200, 40 lần cùng lúc 23 lần 200, WebSocket vẫn nối được.
