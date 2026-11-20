@@ -6,6 +6,16 @@ Cập nhật: 18/11/2026, khoảng 23:30. Phiên Y làm các gói Y1, Y2, Y3, Y4
 
 Viết cho chính phiên Y sau khi context bị nén, hoặc cho phiên khác nhận việc. Cập nhật lần cuối: 18/11/2026, 23:30.
 
+### ĐANG LÀM (21/11/2026): công cụ chuyển dữ liệu cũ từ MongoDB Atlas sang D1
+
+Phiên điều phối giao (theo yêu cầu của chủ dự án): viết và chạy thử công cụ chuyển dữ liệu. Mọi thứ ghi vào `D:\Work\New folder\qa-scripts\cf\chuyen-du-lieu\`. KHÔNG ghi vào D1 thật, KHÔNG deploy, KHÔNG xóa gì; việc áp lên bản chính do phiên điều phối làm.
+
+- Nguồn: database `solaris` trên Atlas (chuỗi kết nối ở `MONGODB_URI` trong `Solaris BE/.env`, đọc bằng code, không in ra): 1 tổ chức, 4 thành viên, 7 khách hàng, 7 đơn, 8 sản phẩm, 25 vòng, 10 link, 43 góp ý, 1736 dòng nhật ký; `sessions`, `oauthstates` trống (bỏ).
+- Đích (bản chính): tổ chức id `6afdc82fa3128299dd04f7ce`, chủ hệ thống id `6afdc82fd1a9424a6bf8f4d8`. Ghép vào, không xóa gì: id tổ chức cũ đổi thành id tổ chức đích, id chủ hệ thống cũ (tìm theo email `OWNER_EMAIL`) đổi thành id chủ hệ thống đích ở MỌI chỗ (cột lẫn JSON lồng); không chèn dòng tổ chức và dòng chủ hệ thống của nguồn; mọi id khác giữ nguyên.
+- Bốn việc: (1) `xuat-mongo.js` xuất chỉ đọc ra JSON giữ kiểu (ObjectId, Date); (2) `chuyen.js --org <id> --owner <id>` sinh file SQL đúng dạng code mới ghi và đọc (dùng lại hàm của repo cho cột suy ra), chia file theo giới hạn của D1, thứ tự theo khóa ngoại, từ chối chạy nếu đích đã có id sắp chèn, in bảng đếm, liệt kê trường bị bỏ; (3) chạy thử trên D1 cục bộ ở `.wrangler/state-chuyen`, cổng 4004: đếm dòng, đối chiếu JSON của các GET chính với backend cũ cho từng tài khoản và từng link còn sống, thử ghi tiếp (góp ý mới, mở vòng kế, sửa đơn); (4) `README.md` với lệnh cho bản chính và cách kiểm.
+- **Điểm lệch có chủ ý so với lời giao việc, vì an toàn dữ liệu thật:** KHÔNG chạy backend cũ trỏ vào Atlas. Lúc khởi động backend cũ chạy `scheduleVersionPurge` (sửa `files` của đơn đã bàn giao quá 30 ngày và xóa file trên Cloudinary thật) và `schedulePendingPurge` (xóa file tạm trên Cloudinary thật); `GET /r/:token` tăng lượt mở link. Cách làm thay: nạp file xuất vào MongoDB cục bộ (mongod của `qa-scripts/cf/goc.js`, cổng 27219, database riêng), chạy backend cũ trên bản sao đó ở cổng riêng với `CLOUDINARY_URL` GIẢ (cùng tên cloud giả ở cả backend cũ lẫn `wrangler dev` cổng 4004, để URL ký giống nhau mà không lời gọi nào chạm kho thật). Atlas chỉ bị đọc một lần lúc xuất.
+- Trạng thái lúc ghi: chưa bắt đầu viết. Cập nhật khối này sau mỗi bước.
+
 ### Đợt việc thứ tư của phiên điều phối (XONG 19/11/2026, khoảng 02:10)
 
 | Việc                                  | Kết quả                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
