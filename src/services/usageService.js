@@ -1,6 +1,6 @@
 import { waitUntil } from "cloudflare:workers";
 import env from "../config/env.js";
-import { binding } from "../config/runtime.js";
+import { binding, dry } from "../config/runtime.js";
 import { batch, first, readAll, run, sql } from "../db/d1.js";
 import {
   isEmptyUsage,
@@ -29,8 +29,18 @@ import { mailEnabled, sendMail } from "./mailService.js";
  *
  * Tạm ngừng: khi một chỉ số đạt USAGE_PAUSE_PERCENT (mặc định 97%) của trần, API trả 503 "quota_paused" cho mọi đường
  * ngoài danh sách cho phép (middleware/quotaMiddleware.js). Dừng trước 100% để quản trị viên còn vào xem được và để D1
- * không rơi vào trạng thái mọi truy vấn lỗi. Trạng thái lấy từ bản chụp trong bộ nhớ (`snapshot`), làm mới mỗi lần ghi
- * số đếm: không hỏi D1 trên đường của request. Isolate mới chưa có bản chụp thì chưa chặn, tới lần ghi đầu tiên mới biết.
+ * không rơi vào trạng thái mọi truy vấn lỗi.
+ *
+ * Trạng thái lấy từ bản chụp trong bộ nhớ (`snapshot`): tổng của ngày mà isolate này biết lần gần nhất. Cloudflare chạy
+ * rất nhiều isolate song song và mỗi cái chỉ thấy phần request của mình, nên bản chụp có HẠN DÙNG NGẮN
+ * (USAGE_SNAPSHOT_SECONDS, mặc định 15 giây): request đầu tiên của isolate, và request đầu tiên sau khi bản chụp hết hạn,
+ * đọc lại dòng của ngày (một dòng, theo khóa chính) trước khi được cho qua (`refreshUsageIfStale`). Nhờ vậy mọi isolate
+ * cùng chặn sau nhiều nhất khoảng 30 giây kể từ lúc vượt ngưỡng: tối đa 15 giây để số đếm được ghi xuống, cộng tối đa
+ * 15 giây để bản chụp của isolate khác hết hạn. Đã biết đang tạm ngừng thì thôi đọc lại: trạng thái đó chỉ hết khi
+ * sang ngày mới, mà ngày thì tự biết từ đồng hồ.
+ * Chi phí: mỗi isolate đang có lưu lượng tốn một dòng đọc mỗi 15 giây (nhiều nhất 5.760 dòng một ngày cho một isolate
+ * bận suốt); tính theo request thì không bao giờ quá một dòng đọc cho mỗi request, tức dưới 100.000 dòng mỗi ngày
+ * (2% hạn mức đọc) trong trường hợp xấu nhất.
  *
  * Số đếm là ƯỚC LƯỢNG, thường thấp hơn số thật của Cloudflare:
  *   - isolate bị tắt trong lúc chờ ghi thì mất phần chưa ghi;
@@ -126,16 +136,33 @@ const toTotals = (row) => ({
   rowsWritten: row?.rows_written || 0,
 });
 
+// Bảng chưa có (chưa áp migration 0002, 0003): thôi thử một lúc, để không lỗi và ghi log ở mọi request.
+const RETRY_AFTER_MISSING_TABLE_MS = 10 * 60 * 1000;
+let pausedUntil = 0;
+
+const readTotals = async (day) =>
+  toTotals(
+    await first(
+      sql`SELECT requests, rows_read, rows_written FROM usage_daily WHERE day = ${day}`
+    )
+  );
+
 // ---------- Bản chụp trong bộ nhớ và trạng thái tạm ngừng ----------
 
 /**
  * Tổng của ngày lần gần nhất isolate này biết (sau một lần ghi số đếm hoặc một lần đọc). `hard`: chính D1 đã báo chạm
  * trần ngày. Bản chụp của ngày cũ không còn giá trị: sang ngày mới (UTC) là tự hết tạm ngừng mà không cần hỏi D1.
  */
-let snapshot = { day: "", totals: toTotals(null), hard: false };
+let snapshot = { day: "", totals: toTotals(null), hard: false, at: 0 };
+const SNAPSHOT_TTL_MS = env.USAGE_SNAPSHOT_SECONDS * 1000;
 
 const remember = (day, totals) => {
-  snapshot = { day, totals, hard: snapshot.day === day && snapshot.hard };
+  snapshot = {
+    day,
+    totals,
+    hard: snapshot.day === day && snapshot.hard,
+    at: Date.now(),
+  };
 };
 
 /** true khi hệ thống đang tạm ngừng vì sắp hết (hoặc đã hết) hạn mức của hôm nay. Không gọi D1. */
@@ -170,15 +197,46 @@ export function noteQuotaError(err) {
     day,
     totals: snapshot.day === day ? snapshot.totals : toTotals(null),
     hard: true,
+    at: Date.now(),
   };
   return true;
 }
 
-// ---------- Ghi số đếm xuống D1 ----------
+/**
+ * Bản chụp của isolate này chưa có hoặc đã quá hạn thì đọc lại dòng của ngày. Trả một promise để nơi gọi chờ trước khi
+ * quyết định cho request qua, hoặc undefined khi bản chụp còn dùng được (đường thường gặp: không tốn gì).
+ * Mỗi request tự đọc phần của mình: KHÔNG dùng chung promise giữa các request (Worker không cho request này chờ
+ * I/O do request khác mở). Vài request tới cùng lúc khi bản chụp vừa hết hạn sẽ cùng đọc, mỗi cái một dòng.
+ * Không bao giờ ném lỗi: đọc không được thì coi như chưa biết gì thêm và cho qua, trừ khi D1 báo đã chạm trần ngày.
+ */
+export function refreshUsageIfStale() {
+  // Request mẫu lúc làm nóng: không đọc, không đổi bản chụp.
+  if (dry()) return undefined;
+  const day = today();
+  if (snapshot.day === day) {
+    if (snapshot.hard || Date.now() - snapshot.at < SNAPSHOT_TTL_MS) {
+      return undefined;
+    }
+    // Đã tạm ngừng theo số đếm: tới hết ngày, không cần đọc lại.
+    if (isPaused()) return undefined;
+  }
+  if (Date.now() < pausedUntil) return undefined;
+  return readTotals(day).then(
+    (totals) => remember(day, totals),
+    (err) => {
+      if (noteQuotaError(err)) return;
+      if (/no such table/i.test(String(err?.message))) {
+        pausedUntil = Date.now() + RETRY_AFTER_MISSING_TABLE_MS;
+      } else {
+        logger.warn({ err }, "Không đọc được mức dùng để kiểm tạm ngừng");
+      }
+      // Giữ những gì đang biết và tính lại hạn dùng, để không đọc lại ở mọi request khi D1 đang trục trặc.
+      remember(day, snapshot.day === day ? snapshot.totals : toTotals(null));
+    }
+  );
+}
 
-// Bảng chưa có (chưa áp migration 0002, 0003): thôi thử một lúc, để không lỗi và ghi log ở mọi request.
-const RETRY_AFTER_MISSING_TABLE_MS = 10 * 60 * 1000;
-let pausedUntil = 0;
+// ---------- Ghi số đếm xuống D1 ----------
 
 /**
  * Ghi phần đang nằm trong bộ nhớ xuống D1: một lô gồm dòng của ngày và dòng của giờ hiện tại. Trả tổng của ngày sau khi
@@ -194,9 +252,9 @@ export async function flushUsage() {
   try {
     const [daily] = await batch([
       sql`
-        INSERT INTO usage_daily (day, requests, rows_read, rows_written, member, guest, anonymous, updated_at)
+        INSERT INTO usage_daily (day, requests, rows_read, rows_written, member, guest, anonymous, paused, updated_at)
         VALUES (${day}, ${delta.requests}, ${delta.rowsRead}, ${delta.rowsWritten},
-                ${delta.member}, ${delta.guest}, ${delta.anonymous}, ${at})
+                ${delta.member}, ${delta.guest}, ${delta.anonymous}, ${delta.paused}, ${at})
         ON CONFLICT (day) DO UPDATE SET
           requests = requests + excluded.requests,
           rows_read = rows_read + excluded.rows_read,
@@ -204,14 +262,15 @@ export async function flushUsage() {
           member = member + excluded.member,
           guest = guest + excluded.guest,
           anonymous = anonymous + excluded.anonymous,
+          paused = paused + excluded.paused,
           updated_at = excluded.updated_at
         RETURNING requests, rows_read, rows_written`,
       sql`
         INSERT INTO usage_hourly (hour, requests, rows_read, rows_written, member, guest, anonymous,
-                                  status_404, status_429, status_5xx, updated_at)
+                                  status_404, status_429, status_5xx, paused, updated_at)
         VALUES (${hourKey()}, ${delta.requests}, ${delta.rowsRead}, ${delta.rowsWritten},
                 ${delta.member}, ${delta.guest}, ${delta.anonymous},
-                ${delta.status404}, ${delta.status429}, ${delta.status5xx}, ${at})
+                ${delta.status404}, ${delta.status429}, ${delta.status5xx}, ${delta.paused}, ${at})
         ON CONFLICT (hour) DO UPDATE SET
           requests = requests + excluded.requests,
           rows_read = rows_read + excluded.rows_read,
@@ -222,6 +281,7 @@ export async function flushUsage() {
           status_404 = status_404 + excluded.status_404,
           status_429 = status_429 + excluded.status_429,
           status_5xx = status_5xx + excluded.status_5xx,
+          paused = paused + excluded.paused,
           updated_at = excluded.updated_at`,
     ]);
     const totals = toTotals(daily.rows[0]);
@@ -231,7 +291,7 @@ export async function flushUsage() {
     if (/no such table|has no column named/i.test(String(err?.message))) {
       pausedUntil = Date.now() + RETRY_AFTER_MISSING_TABLE_MS;
       logger.warn(
-        "Chưa có bảng đếm mức dùng (chưa áp migration 0002, 0003): tạm không đếm"
+        "Chưa có bảng đếm mức dùng (chưa áp migration 0002, 0003, 0004): tạm không đếm"
       );
     } else {
       // Lỗi tạm: giữ số lại, lượt sau ghi tiếp. D1 báo chạm trần ngày thì chuyển sang tạm ngừng.
@@ -286,13 +346,6 @@ export function scheduleUsageFlush() {
 
 // ---------- Đọc mức dùng ----------
 
-const readTotals = async (day) =>
-  toTotals(
-    await first(
-      sql`SELECT requests, rows_read, rows_written FROM usage_daily WHERE day = ${day}`
-    )
-  );
-
 /** Ba chỉ số của hôm nay từ số đã ghi (`stored`) cộng phần isolate này chưa kịp ghi. D1 đã báo chạm trần thì mức chung là paused. */
 const todayView = (stored) => {
   const pending = pendingUsage();
@@ -322,7 +375,7 @@ const COUNT_KEYS = [
   "guest",
   "anonymous",
 ];
-const STATUS_KEYS = ["status404", "status429", "status5xx"];
+const STATUS_KEYS = ["status404", "status429", "status5xx", "paused"];
 
 /** Các lớp bảo vệ hạn mức, để trang hạ tầng hiển thị cái nào đang bật. */
 const protectionList = () => {
@@ -418,9 +471,9 @@ export async function getInfrastructure() {
   );
 
   const [dailyRows, hourlyRows, alertRows] = await readAll([
-    sql`SELECT day, requests, rows_read, rows_written, member, guest, anonymous
+    sql`SELECT day, requests, rows_read, rows_written, member, guest, anonymous, paused
         FROM usage_daily WHERE day >= ${daySlots[0]}`,
-    sql`SELECT hour, requests, rows_read, rows_written, member, guest, anonymous, status_404, status_429, status_5xx
+    sql`SELECT hour, requests, rows_read, rows_written, member, guest, anonymous, status_404, status_429, status_5xx, paused
         FROM usage_hourly WHERE hour >= ${hourSlots[0].key}`,
     sql`SELECT day, metric, threshold, emailed_at FROM usage_alerts
         ORDER BY created_at DESC, threshold DESC LIMIT 20`,
@@ -446,6 +499,8 @@ export async function getInfrastructure() {
       status404: row?.status_404 || 0,
       status429: row?.status_429 || 0,
       status5xx: row?.status_5xx || 0,
+      // Request bị từ chối vì tạm ngừng (503 "quota_paused"): đếm riêng, không nằm trong status5xx.
+      paused: row?.paused || 0,
     };
     // Giờ hiện tại (phần tử cuối): cộng phần isolate này chưa kịp ghi.
     if (index === HOURS_SHOWN - 1) {
@@ -465,8 +520,12 @@ export async function getInfrastructure() {
       member: row?.member || 0,
       guest: row?.guest || 0,
       anonymous: row?.anonymous || 0,
+      paused: row?.paused || 0,
     };
-    if (index === DAYS_SHOWN - 1) addInto(item, pending, COUNT_KEYS);
+    if (index === DAYS_SHOWN - 1) {
+      addInto(item, pending, COUNT_KEYS);
+      addInto(item, pending, ["paused"]);
+    }
     // Mức cao nhất trong ba chỉ số của ngày đó, tính theo trần hiện tại.
     item.peakPercent = Math.max(
       ...METRICS.map((metric) => percentOf(item[metric.key], metric.limit()))
@@ -650,8 +709,13 @@ function buildAlertMail(day, totals, claimedRows) {
   if (paused) headline = "Hệ thống đã tạm ngừng vì sắp hết hạn mức";
   else if (worst >= 90) headline = "Sắp chạm trần gói miễn phí";
 
-  const subject = `[Solaris] ${headline}: ${top.label} đã dùng ${percentText(top.percent)}`;
+  // Bản không phải bản team dùng (ENVIRONMENT_LABEL, ví dụ "bản thử"): ghi rõ ở tiêu đề và dòng đầu, để không lẫn với thư thật.
+  const label = env.ENVIRONMENT_LABEL;
+  const subject = `[Solaris${label ? `, ${label}` : ""}] ${headline}: ${top.label} đã dùng ${percentText(top.percent)}`;
   const text = [
+    ...(label
+      ? [`Đây là thư từ ${label}, không phải bản team đang dùng.`, ""]
+      : []),
     paused
       ? `Bản Solaris tại ${env.FRONTEND_URL} đã TẠM NGỪNG phục vụ: một chỉ số đã đạt ${env.USAGE_PAUSE_PERCENT}% hạn mức gói miễn phí Cloudflare của ngày ${day} (giờ UTC).`
       : `Bản Solaris tại ${env.FRONTEND_URL} vừa vượt ngưỡng cảnh báo của gói miễn phí Cloudflare trong ngày ${day} (giờ UTC).`,

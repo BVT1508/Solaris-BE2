@@ -70,9 +70,14 @@ const envSchema = z
     USAGE_LIMIT_ROWS_WRITTEN: numberOr(100000, z.number().int().positive()),
     // Một chỉ số đạt chừng này phần trăm của trần thì hệ thống tạm ngừng tới 00:00 UTC (services/usageService.js).
     USAGE_PAUSE_PERCENT: numberOr(97, z.number().min(1).max(100)),
+    // Bản chụp mức dùng trong bộ nhớ của một isolate dùng được bao nhiêu giây rồi phải đọc lại D1 (services/usageService.js).
+    USAGE_SNAPSHOT_SECONDS: numberOr(15, z.number().min(1).max(3600)),
     // Số đếm nằm trong bộ nhớ bao nhiêu giây rồi mới ghi xuống D1 (một lần ghi cho mọi request trong khoảng đó).
     // Tối đa 25: việc ghi chạy sau response, Cloudflare chỉ giữ request sống thêm 30 giây.
     USAGE_FLUSH_SECONDS: numberOr(15, z.number().min(0).max(25)),
+    // Tên của bản đang chạy khi nó KHÔNG phải bản team dùng, ví dụ "bản thử". Có giá trị thì email cảnh báo ghi rõ nó
+    // đến từ bản đó, để không lẫn với thư của bản chính. Bản chính để trống.
+    ENVIRONMENT_LABEL: optionalString(),
     // Khóa API của Resend để gửi email cảnh báo hạn mức. Chưa có thì không gửi email, chỉ ghi nhận ngưỡng đã vượt.
     RESEND_API_KEY: optionalString(),
     // Người gửi. Mặc định là địa chỉ thử của Resend: chỉ gửi được tới email của chính tài khoản Resend.
@@ -147,7 +152,9 @@ const env = loadEnv({
   USAGE_LIMIT_ROWS_READ: bindings.USAGE_LIMIT_ROWS_READ,
   USAGE_LIMIT_ROWS_WRITTEN: bindings.USAGE_LIMIT_ROWS_WRITTEN,
   USAGE_PAUSE_PERCENT: bindings.USAGE_PAUSE_PERCENT,
+  USAGE_SNAPSHOT_SECONDS: bindings.USAGE_SNAPSHOT_SECONDS,
   USAGE_FLUSH_SECONDS: bindings.USAGE_FLUSH_SECONDS,
+  ENVIRONMENT_LABEL: bindings.ENVIRONMENT_LABEL,
   RESEND_API_KEY: bindings.RESEND_API_KEY,
   ALERT_EMAIL_FROM: bindings.ALERT_EMAIL_FROM,
   ALERT_EMAIL_TO: bindings.ALERT_EMAIL_TO,

@@ -1,10 +1,16 @@
 import env from "../config/env.js";
-import { isPaused, nextReset } from "../services/usageService.js";
+import { markPaused } from "../db/usageCounter.js";
+import {
+  isPaused,
+  nextReset,
+  refreshUsageIfStale,
+} from "../services/usageService.js";
 
 /**
  * Tạm ngừng khi sắp hết hạn mức gói miễn phí của hôm nay (services/usageService.js quyết định lúc nào).
- * Đứng TRƯỚC việc đọc body, giới hạn tần suất, đọc phiên và mọi truy vấn D1: request bị chặn chỉ tốn một phép so sánh
- * và một response nhỏ, không đụng database.
+ * Đứng TRƯỚC việc đọc body, giới hạn tần suất, đọc phiên và mọi truy vấn khác: request bị chặn chỉ tốn một phép so sánh
+ * và một response nhỏ. Chỉ khi isolate chưa biết mức dùng của hôm nay, hoặc bản chụp của nó đã quá hạn (15 giây), request
+ * mới phải chờ đọc một dòng của D1 trước khi được cho qua: nhờ đó mọi isolate cùng chặn trong vài chục giây.
  */
 export const PAUSE_CODE = "quota_paused";
 export const PAUSE_MESSAGE =
@@ -26,6 +32,8 @@ const ALLOWED = new Set([
 
 /** Response 503 báo tạm ngừng: cùng một hình dạng ở mọi nơi (middleware này và bộ xử lý lỗi khi D1 báo chạm trần). */
 export const pausedResponse = (c) => {
+  // Đếm riêng là "bị từ chối vì tạm ngừng", không lẫn vào số lỗi 5xx của trang hạ tầng.
+  markPaused(c.req.raw);
   const resetAt = nextReset();
   c.header(
     "Retry-After",
@@ -45,11 +53,12 @@ export const pausedResponse = (c) => {
 
 export const pauseGate = async (c, next) => {
   if (
-    isPaused() &&
     c.req.method !== "OPTIONS" &&
     !ALLOWED.has(`${c.req.method} ${c.req.path.replace(/\/+$/, "")}`)
   ) {
-    return pausedResponse(c);
+    const refreshing = refreshUsageIfStale();
+    if (refreshing) await refreshing;
+    if (isPaused()) return pausedResponse(c);
   }
   await next();
   return undefined;

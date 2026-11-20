@@ -16,6 +16,7 @@ const KEYS = [
   "status404",
   "status429",
   "status5xx",
+  "paused",
 ];
 
 const zero = () => Object.fromEntries(KEYS.map((key) => [key, 0]));
@@ -43,13 +44,21 @@ export const markMember = (request) => {
   members.add(request);
 };
 
+// Request bị từ chối vì hệ thống đang tạm ngừng (503 "quota_paused", hoặc kết nối trực tiếp bị đóng mã 4503).
+const refused = new WeakSet();
+
+/** Đánh dấu request là bị từ chối vì tạm ngừng: đếm riêng ở `paused`, không tính là lỗi 5xx. */
+export const markPaused = (request) => {
+  refused.add(request);
+};
+
 // Đường của khách mở link chia sẻ, token đúng dạng: /api/v1/r/<32 ký tự>, hoặc kết nối trực tiếp kèm ?token=.
 const GUEST_PATH = /^\/api\/v1\/r\/[A-Za-z0-9_-]{32}(\/|$)/;
 const GUEST_SOCKET =
   /^\/api\/v1\/realtime\/?\?(.*&)?token=[A-Za-z0-9_-]{32}(&|$)/;
 
 /**
- * Request vừa được trả lời: phân loại người gọi và ghi nhận mã trả về.
+ * Request vừa được trả lời: phân loại người gọi và ghi nhận mã trả về (404, 429, 5xx), hoặc việc bị từ chối vì tạm ngừng.
  *   member     có phiên hợp lệ
  *   guest      đường của link chia sẻ với token đúng dạng (chưa chắc token có thật)
  *   anonymous  còn lại: chưa đăng nhập, đường lạ, dò quét. Phần lớn lưu lượng của bot rơi vào đây.
@@ -62,7 +71,8 @@ export const countOutcome = (request, status) => {
     if (GUEST_PATH.test(path) || GUEST_SOCKET.test(path)) pending.guest += 1;
     else pending.anonymous += 1;
   }
-  if (status === 404) pending.status404 += 1;
+  if (refused.has(request)) pending.paused += 1;
+  else if (status === 404) pending.status404 += 1;
   else if (status === 429) pending.status429 += 1;
   else if (status >= 500) pending.status5xx += 1;
 };

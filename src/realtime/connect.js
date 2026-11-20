@@ -1,9 +1,9 @@
 import { getCookie } from "hono/cookie";
 import env, { bindings } from "../config/env.js";
 import { first, sql } from "../db/d1.js";
-import { markMember } from "../db/usageCounter.js";
+import { markMember, markPaused } from "../db/usageCounter.js";
 import { PAUSE_CODE, PAUSE_MESSAGE } from "../middleware/quotaMiddleware.js";
-import { isPaused } from "../services/usageService.js";
+import { isPaused, refreshUsageIfStale } from "../services/usageService.js";
 import { isTrustedOrigin } from "../middleware/securityMiddleware.js";
 import { clientIp } from "../middleware/rateLimitMiddleware.js";
 import { hashToken, resolveSession } from "../services/authService.js";
@@ -93,7 +93,13 @@ export async function connectRealtime(c) {
     );
   }
   // Hệ thống đang tạm ngừng vì hết hạn mức: từ chối trước khi đọc phiên hay link (mã đóng 4503, kèm code "quota_paused").
-  if (isPaused()) return refuse(503, PAUSE_MESSAGE, PAUSE_CODE);
+  // Như cổng tạm ngừng của API: isolate chưa biết mức dùng của hôm nay thì đọc lại trước khi quyết định.
+  const refreshing = refreshUsageIfStale();
+  if (refreshing) await refreshing;
+  if (isPaused()) {
+    markPaused(c.req.raw);
+    return refuse(503, PAUSE_MESSAGE, PAUSE_CODE);
+  }
 
   // Mỗi lần mở kết nối tốn một lần đọc phiên hoặc link: một IP không mở quá 120 kết nối mỗi phút.
   if (bindings.SOCKET_LIMITER && !env.IS_DEV) {
