@@ -23,15 +23,19 @@ Solaris: agency nhận đơn, làm sản phẩm bàn giao, khách mở link khô
 ## Luật làm việc
 
 - Trả lời, viết tài liệu, viết chú thích code bằng tiếng Việt.
-- Thước đo xong việc: bộ Postman của backend cũ (`D:\Work\New folder\Solaris BE\postman\`, 406 request) chạy qua với backend mới ở `http://127.0.0.1:4000` (chạy `wrangler dev` đúng cổng đó để không phải đổi environment của Postman).
+- **Thước đo xong việc là bản chạy thật trên Cloudflare** (chủ dự án dặn ngày 21/11/2026): sản phẩm phải được deploy và chạy trên Internet; không lấy kiểm thử trên máy dev làm cổng chặn. Có hai bản:
+  - Bản chính, team dùng: Worker `app`, D1 `solaris`, `https://app.solaris-fbs.workers.dev`. Không chạy kịch bản tự động vào bản này.
+  - Bản thử, cho kịch bản tự động: Worker `app-thu`, D1 `solaris-thu`, `https://app-thu.solaris-fbs.workers.dev`. Bộ đăng nhập và các kịch bản chạy với bản thử nằm ở `D:\Work\New folder\qa-scripts\cf\that\`.
+- Bộ Postman của backend cũ (406 request) và `node chay-tat-ca.js` ở `qa-scripts/cf` vẫn là lưới an toàn nhanh khi sửa code (chạy với `wrangler dev`), nhưng không bắt buộc trước mỗi lần deploy.
 - Không viết test tự động trong repo, không seed dữ liệu mẫu. Kịch bản thử để ở `D:\Work\New folder\qa-scripts\`.
-- Trước khi báo xong một phần: lint sạch, chạy `wrangler dev` được, và nêu rõ phần nào đã thử, phần nào chưa.
+- Trước khi báo xong một phần: lint sạch, và nêu rõ phần nào đã thử (ở đâu: máy dev, bản thử, bản chính), phần nào chưa.
+- Gói miễn phí không bao giờ tính tiền: chạm trần thì request lỗi tới 00:00 UTC. Mọi thứ dính tới thanh toán (nâng gói, dịch vụ trả tiền) phải được chủ dự án duyệt trước.
 - Repo này: được commit, không push. Lời commit kiểu của chủ dự án: tiếng Anh, chữ thường, một dòng nói chỉnh cái gì. Mỗi phiên chỉ commit file của phần mình.
 - Repo `Solaris BE` và `Solaris FE`: chỉ đọc. Riêng phiên frontend được sửa `Solaris FE`, không commit.
-- Tuyệt đối không xóa file quan trọng hay dữ liệu database nếu chưa hỏi chủ dự án.
+- Tuyệt đối không xóa file quan trọng hay dữ liệu (D1 cục bộ lẫn trên Cloudflare, file trên Cloudinary, tài nguyên Cloudflare) nếu chưa hỏi chủ dự án.
 - Không in giá trị khóa bí mật ra màn hình hay vào tài liệu. Khóa cho máy dev nằm ở `.dev.vars` (không commit).
 - API của Cloudflare đổi nhanh: tra tài liệu hiện hành (developers.cloudflare.com) trước khi dùng, không dựa vào trí nhớ.
-- Chưa deploy lên tài khoản Cloudflare của chủ dự án; việc đó chờ chủ dự án đăng nhập `wrangler` ở ngày cuối.
+- Deploy do phiên điều phối làm (chủ dự án cho phiên đó toàn quyền deploy; lệnh deploy của các phiên khác bị lớp kiểm quyền từ chối, đừng tìm đường vòng). Phiên khác sửa xong thì commit rồi nhắn phiên điều phối deploy. Cách deploy: `D:\Work\New folder\qa-scripts\cf\x-do-cpu\build-deploy.sh HEAD 0` cho bản chính; thư mục `qa-scripts\cf\that\deploy-thu` cho bản thử.
 
 ## Phối hợp
 
