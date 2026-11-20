@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Bàn giao (đọc mục này trước nếu vừa mất context)
 
-Cập nhật lần cuối: 21/11/2026, sau đợt làm nóng. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+Cập nhật lần cuối: 21/11/2026, sau đợt tạm ngừng và trang hạ tầng. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
 
 **Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
 
@@ -62,6 +62,29 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 - Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
 
 **Tin của phiên điều phối chưa làm xong:** không còn. Việc mới nhất là đợt 21/11 (đếm mức dùng và cảnh báo), đã xong phần code và thử trên máy dev, chờ phiên điều phối áp migration `0002` và deploy; xem mục "Đợt 21/11". Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+
+## Đợt 21/11 (tiếp nữa): tạm ngừng khi hết hạn mức, chống bot, trang hạ tầng
+
+Yêu cầu của chủ dự án qua phiên điều phối (ưu tiên cao). Chi tiết thiết kế: `docs/kien-truc.md` mục 10, phần "Tạm ngừng, chống bot và trang hạ tầng"; hợp đồng cho frontend: `docs/api-bo-sung.md`; lời cho chủ dự án: `README.md` mục "Hạn mức gói miễn phí và cảnh báo".
+
+- [x] **A. Tạm ngừng**: `src/middleware/quotaMiddleware.js` (cổng `pauseGate`, đứng trước `parseBody` trong `app.js`; `pausedResponse`), `isPaused` và `noteQuotaError` trong `usageService.js` (bản chụp trong bộ nhớ, không hỏi D1), `errorController.js` (D1 báo chạm trần thì trả cùng 503), `realtime/connect.js` (từ chối, mã đóng 4503, `code: "quota_paused"`). Biến `USAGE_PAUSE_PERCENT` (97). Ngưỡng tạm ngừng cũng là một ngưỡng cảnh báo có email.
+- [x] **B. Chống bot**: `wrangler.jsonc` assets `not_found_handling: "single-page-application"` cộng `run_worker_first: ["/api", "/api/*"]`; `scripts/sync-frontend.mjs` sinh `robots.txt` và header `X-Robots-Tag`; phân loại `member`, `guest`, `anonymous` và đếm 404, 429, 5xx (`db/usageCounter.js`, `index.js`, `markMember` ở `protect` và ở kết nối trực tiếp). Không thêm bộ giới hạn riêng cho lưu lượng không danh tính (lý do ở mục 10).
+- [x] **C. `GET /api/v1/infrastructure`**: `getInfrastructure` trong `usageService.js`, `usageController.js`, `usageRoutes.js` (`infrastructureRoutes`), migration `0003_usage_hourly.sql` (bảng `usage_hourly`, ba cột thêm vào `usage_daily`); việc định kỳ "dọn số đếm mức dùng cũ" (14 ngày theo giờ, 400 ngày theo ngày và cảnh báo). Mục `protection` có dòng `warmup` cho biết việc làm nóng có chạy trọn trên bản đang chạy không.
+- [x] **D. Tài liệu**: `README.md`, `docs/api-bo-sung.md`, `docs/hop-dong-realtime.md` (mã 4503), `docs/kien-truc.md` (mục 1, 7, 10).
+
+Đã thử, tất cả trên **máy dev** (`wrangler dev`, mỗi lượt một thư mục D1 mới, không xóa gì): `x_kiem_tam_ngung.mjs` 34/34 (quyền, hình dạng, 7 đường bot hay dò không gọi Worker, `robots.txt`, phân loại, tạm ngừng ở 97%, danh sách cho phép, kết nối trực tiếp 4503, request bị chặn không đụng D1, email báo tạm ngừng qua server giả); `x-do-lanh/thu-loi-tran-d1.mjs` 7/7 (D1 giả ném đúng lời lỗi chạm trần của Cloudflare); `x_kiem_muc_dung.mjs` 18/18 và 8/8 (nay chạy với `USAGE_PAUSE_PERCENT:100`); cả bộ Postman 406 request 1377/1377 (`ket-qua/2026-11-21_023325_x-tam-ngung`), server không nạp lại; `x_kiem_gop_y_team` 68/68; `cu/be_kiem_sua_nhanh.js` 32/32; lint, prettier, `warmup:check` sạch.
+
+**Chưa thử trên Cloudflare thật**, và đây là những điểm cần phiên điều phối kiểm khi deploy bản thử:
+
+1. Áp `0003_usage_hourly.sql` lên cả hai D1 TRƯỚC khi deploy code (thiếu thì không lỗi, nhưng không đếm và vì vậy không tự tạm ngừng).
+2. Đường bot hay dò có gọi Worker không: tài liệu của Cloudflare không nhất quán, tôi chỉ xác nhận được trên workerd cục bộ. Cách kiểm: bắn `/wp-login.php`, `/.env`, một đường ngẫu nhiên (không kèm header trình duyệt) rồi xem `wrangler tail` có sự kiện nào không, hoặc xem số request ở `GET /infrastructure` có tăng không.
+3. `robots.txt` chỉ có sau khi chạy lại `npm run sync-frontend` (file do script sinh, không nằm trong bản build của frontend).
+4. Lời lỗi thật của D1 khi chạm trần ngày: tôi khớp theo chuỗi trong tài liệu ("free tier daily row read/write limit"), chưa thấy lỗi thật.
+5. Dòng `warmup` trong `protection` của `GET /infrastructure`: nếu `active` là false trên bản thử thì việc làm nóng đang vấp một điều cấm chỉ có ở Cloudflare thật (giải thích được vì sao request thứ 1 không đổi và thời gian khởi động vẫn 54 ms).
+
+File dùng chung đã sửa đợt này: `src/app.js`, `src/index.js`, `src/routes/index.js`, `src/controllers/errorController.js`, `src/controllers/authController.js` (một dòng `markMember`), `src/realtime/connect.js`, `src/config/env.js`, `src/middleware/frontendMiddleware.js` (chỉ chú thích), `wrangler.jsonc`, `.dev.vars.example`, `scripts/sync-frontend.mjs`, `scripts/prepare-dev.mjs`.
+
+**Còn nợ** (phiên điều phối dặn làm sau việc này): xem 13 request mẫu của việc làm nóng có đi hết đường tạo góp ý của khách không (`POST /r/:token/feedback` là 8 trên 9 request còn vượt 10 ms), và phần nào chỉ chạy với binding thật.
 
 ## Đợt 21/11 (tiếp): giảm CPU vòng hai, làm nóng lúc nạp module
 

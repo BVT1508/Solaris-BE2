@@ -101,34 +101,70 @@ Bảng đầy đủ, cách đo và các luật viết code để giữ CPU thấ
 
 ## Hạn mức gói miễn phí và cảnh báo
 
-**Gói miễn phí không bao giờ tính tiền.** Chạm trần thì không bị trừ tiền mà bị ngừng phục vụ tới 00:00 UTC (07:00 giờ Việt Nam), lúc Cloudflare đặt lại hạn mức ngày:
+**Gói miễn phí không bao giờ tính tiền.** Hạn mức tính theo ngày; chạm trần thì không bị trừ tiền mà bị ngừng phục vụ tới 00:00 UTC (07:00 giờ Việt Nam), lúc Cloudflare đặt lại:
 
-| Trần mỗi ngày (tính theo tài khoản Cloudflare) | Chạm trần thì                                                                              |
+| Trần mỗi ngày (tính theo tài khoản Cloudflare) | Nếu để chạm trần                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | 100.000 request vào Worker                     | Cloudflare chặn request trước khi tới Worker (trang lỗi 1027): API và đăng nhập ngừng chạy |
-| 100.000 dòng D1 ghi                            | mọi truy vấn D1 lỗi: API trả 500, không đăng nhập, không lưu được gì                       |
+| 100.000 dòng D1 ghi                            | mọi truy vấn D1 lỗi: không đăng nhập, không lưu được gì                                    |
 | 5.000.000 dòng D1 đọc                          | như trên                                                                                   |
 
-Cloudflare không báo trước khi sắp chạm trần, nên hệ thống tự đếm và báo sớm.
+Cloudflare không báo trước khi sắp chạm trần. Hệ thống tự lo bốn việc: đếm, cảnh báo, tạm ngừng trước khi chạm trần, và không để bot làm hao request.
 
-**Xem mức dùng.** Quản trị viên gọi `GET /api/v1/usage` (màn quản trị của frontend hiển thị): ba chỉ số trên, số đã dùng trong ngày, phần trăm của trần, và mức `ok`, `warning` (từ 70%), `critical` (từ 90%). Hình dạng response: [docs/api-bo-sung.md](docs/api-bo-sung.md).
+### Đếm và xem mức dùng
+
+Quản trị viên xem ở mục "Quản lý hạ tầng" của giao diện (`GET /api/v1/infrastructure`: ba chỉ số của hôm nay, biểu đồ 48 giờ và 30 ngày, lưu lượng chia theo thành viên, khách và không danh tính, các cảnh báo đã gửi, các lớp bảo vệ đang bật) hoặc `GET /api/v1/usage`. Hợp đồng: [docs/api-bo-sung.md](docs/api-bo-sung.md).
 
 **Số này là ước lượng**, thường thấp hơn số thật của Cloudflare:
 
 - Chỉ đếm Worker này và database của nó. Hạn mức của Cloudflare tính chung cho cả tài khoản: bản thử (`app-thu`), lệnh `wrangler d1 execute`, việc áp migration và thao tác trên trang quản trị Cloudflare ăn chung hạn mức mà không nằm trong số đếm.
-- Số đếm nằm trong bộ nhớ khoảng 15 giây rồi mới ghi xuống database (một dòng ghi cho mọi request trong khoảng đó, để việc đếm gần như không tốn hạn mức). Phần chưa kịp ghi mất khi Cloudflare tắt tiến trình.
+- Số đếm nằm trong bộ nhớ khoảng 15 giây rồi mới ghi xuống database (hai dòng ghi cho mọi request trong khoảng đó, để việc đếm gần như không tốn hạn mức). Phần chưa kịp ghi mất khi Cloudflare tắt tiến trình.
 
 Số chính xác xem ở trang quản trị Cloudflare (Workers & Pages, và D1).
 
-**Email cảnh báo.** Khi một chỉ số lần đầu trong ngày vượt 70% hoặc 90%, hệ thống ghi nhận (bảng `usage_alerts`) và gửi một email tới `OWNER_EMAIL`; mỗi chỉ số, mỗi ngưỡng, mỗi ngày đúng một lần. Việc kiểm chạy ngay sau mỗi lần ghi số đếm và trong việc định kỳ mỗi giờ; gửi lỗi thì giờ sau thử lại.
+### Tạm ngừng khi sắp hết hạn mức
+
+Khi một chỉ số đạt **97%** của trần (biến `USAGE_PAUSE_PERCENT`), hệ thống tự tạm ngừng tới 07:00 sáng hôm sau (giờ Việt Nam):
+
+- Mọi lời gọi API trả 503 với mã `quota_paused`; giao diện hiện màn hình báo hết lưu lượng của hôm nay và giờ hoạt động lại, cho cả thành viên lẫn khách mở link.
+- Quản trị viên vẫn đăng nhập và xem trang hạ tầng được (các đường đó nằm trong danh sách cho phép).
+- Request bị chặn được trả lời trước khi đụng database, nên gần như không tốn gì.
+
+Dừng ở 97% chứ không chờ 100% vì hai lý do: chừa phần cho quản trị viên vào xem, và để database không rơi vào trạng thái mọi truy vấn đều lỗi. Vì số đếm là ước lượng, còn một lớp nữa: khi chính D1 báo tài khoản đã chạm trần ngày, hệ thống cũng chuyển sang tạm ngừng và trả cùng thông báo thay cho lỗi 500.
+
+Giới hạn cần biết: mỗi tiến trình của Worker chỉ biết số đếm sau lần ghi đầu tiên của nó, nên ngay sau lúc tạm ngừng vẫn có vài request lọt qua; và hạn mức **request** thì không tự cứu được hoàn toàn, vì request bị chặn vẫn là một request vào Worker.
+
+### Chống bot làm hao request
+
+Nói thẳng: Worker trên địa chỉ `workers.dev` **không có tường lửa (WAF)**. Request nào đã vào Worker là đã bị tính vào 100.000 request của ngày, dù Worker từ chối nó. Cách duy nhất không mất request là không để Worker chạy. Những gì đã làm:
+
+| Lớp                                              | Tác dụng                                                                                                                                                                                                  |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Đường dẫn ngoài `/api` không gọi Worker          | Cloudflare tự trả file tĩnh, và trả `index.html` cho mọi đường khác, kể cả đường bot dò quét (`/wp-login.php`, `/.env`, `/xmlrpc.php`, đường ngẫu nhiên). **Không tính vào hạn mức request.**             |
+| `robots.txt` cấm thu thập, header `X-Robots-Tag` | Bộ thu thập tử tế (Google, Bing...) không quét. Bot xấu thì bỏ qua file này.                                                                                                                              |
+| Request chưa đăng nhập không đụng database       | Không có cookie phiên và không phải đường của link chia sẻ thì bị từ chối (401, 404) trước khi hỏi database: tốn một request nhưng không tốn dòng đọc, ghi.                                               |
+| Giới hạn tần suất theo IP                        | 600 request API mỗi phút; 10 lần đăng nhập; 120 lần mở link chia sẻ; 60 lần ghi của khách. **Giảm tải cho database, không giảm số request bị tính**: request bị chặn (429) vẫn là một request vào Worker. |
+| Tạm ngừng ở 97%                                  | Chặn mọi thứ trước khi database hết hạn mức.                                                                                                                                                              |
+
+Trang hạ tầng tách lưu lượng thành ba loại (thành viên, khách, không danh tính) và đếm số 404, 429, 5xx theo giờ: cột "không danh tính" tăng vọt là dấu hiệu bot đang gõ vào `/api`.
+
+Đánh đổi của lớp đầu tiên: một file không tồn tại (ví dụ gói JS cũ sau lần deploy) nhận `index.html` thay cho 404.
+
+**Khuyến nghị (có phí, chưa làm):** muốn chặn bot TRƯỚC khi nó vào Worker thì cần một tên miền riêng đưa vào Cloudflare. Khi đó dùng được luật WAF, luật giới hạn tần suất ở biên và Bot Fight Mode của gói miễn phí, và tắt được địa chỉ `workers.dev`. Chi phí là tiền tên miền hằng năm; phần Cloudflare vẫn miễn phí.
+
+### Email cảnh báo
+
+Khi một chỉ số lần đầu trong ngày vượt 70%, 90%, hoặc ngưỡng tạm ngừng, hệ thống ghi nhận (bảng `usage_alerts`) và gửi một email tới `OWNER_EMAIL`; mỗi chỉ số, mỗi ngưỡng, mỗi ngày đúng một lần. Việc kiểm chạy ngay sau mỗi lần ghi số đếm và trong việc định kỳ mỗi giờ; gửi lỗi thì giờ sau thử lại.
 
 Email gửi qua [Resend](https://resend.com) (gói miễn phí: 100 email mỗi ngày, 3.000 mỗi tháng). Worker trên địa chỉ `workers.dev` không có tên miền nên không dùng được cách gửi email của chính Cloudflare. Bật email:
 
 1. Đăng ký Resend bằng **đúng địa chỉ `OWNER_EMAIL`**. Chưa có tên miền thì Resend chỉ cho gửi từ `onboarding@resend.dev` tới email của chính tài khoản Resend, nên hai địa chỉ phải trùng nhau.
 2. Tạo một API key ở Resend, rồi đặt làm khóa bí mật: `npx wrangler secret put RESEND_API_KEY -c wrangler.deploy.jsonc`.
 
-Nếu tài khoản Resend đăng ký bằng một email khác `OWNER_EMAIL`, đặt thêm khóa `ALERT_EMAIL_TO` bằng đúng email của tài khoản Resend (`npx wrangler secret put ALERT_EMAIL_TO --name app`): email cảnh báo sẽ gửi tới địa chỉ đó thay cho `OWNER_EMAIL`.
+Nếu tài khoản Resend đăng ký bằng một email khác `OWNER_EMAIL`, đặt thêm khóa `ALERT_EMAIL_TO` bằng đúng email của tài khoản Resend (`npx wrangler secret put ALERT_EMAIL_TO -c wrangler.deploy.jsonc`).
 
-Chưa đặt `RESEND_API_KEY` thì hệ thống vẫn đếm, vẫn ghi nhận ngưỡng đã vượt và `GET /api/v1/usage` vẫn dùng được; chỉ không có email. Đặt khóa sau thì ngưỡng đã vượt trong ngày mà chưa báo sẽ được gửi ở lượt kiểm kế tiếp. Sau này có tên miền riêng đã xác minh ở Resend thì đặt `ALERT_EMAIL_FROM` để đổi người gửi.
+Chưa đặt `RESEND_API_KEY` thì hệ thống vẫn đếm, vẫn ghi nhận ngưỡng đã vượt, vẫn tạm ngừng đúng lúc; chỉ không có email. Đặt khóa sau thì ngưỡng đã vượt trong ngày mà chưa báo sẽ được gửi ở lượt kiểm kế tiếp. Sau này có tên miền riêng đã xác minh ở Resend thì đặt `ALERT_EMAIL_FROM` để đổi người gửi.
 
-Trần dùng để tính phần trăm đặt ở `vars` của `wrangler.jsonc` (`USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN`): đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Bảng đếm tạo bằng migration `0002_usage.sql`; chưa áp migration này thì hệ thống chạy bình thường nhưng không đếm.
+### Cấu hình
+
+Trần dùng để tính phần trăm đặt ở `vars` của `wrangler.jsonc` (`USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN`, `USAGE_PAUSE_PERCENT`): đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Bảng đếm tạo bằng migration `0002_usage.sql` và `0003_usage_hourly.sql`; chưa áp thì hệ thống chạy bình thường nhưng không đếm (và vì vậy không tự tạm ngừng).

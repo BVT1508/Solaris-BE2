@@ -19,7 +19,7 @@ Trình duyệt ──► Cloudflare (một Worker tên "solaris", địa chỉ *
 Cron Triggers ──► scheduled() trong src/index.js → src/jobs
 ```
 
-- **Một Worker**, tên `app` (địa chỉ deploy: `https://app.solaris-fbs.workers.dev`). File tĩnh có thật do Cloudflare phục vụ trước khi tới Worker (không tốn lượt request của gói miễn phí). `/api/*` luôn vào Worker (`run_worker_first`). Đường dẫn không khớp file nào cũng vào Worker: `src/middleware/frontendMiddleware.js` trả `index.html` cho đường dẫn của ứng dụng (GET hoặc HEAD, không có đuôi file, không phải `/api` hay `/socket.io`) và để 404 JSON cho phần còn lại, đúng như backend cũ. **Không dùng chế độ `single-page-application` của Cloudflare**: đã thử, chế độ đó trả `index.html` cho cả file thiếu (một gói JS cũ sau lần deploy), trình duyệt nhận HTML thay cho 404. Cái giá: mỗi lần mở thẳng một trang sâu (`/r/:token`, `/orders/...`) tốn một lượt request của Worker.
+- **Một Worker**, tên `app` (địa chỉ deploy: `https://app.solaris-fbs.workers.dev`). **Worker chỉ chạy cho `/api` và `/api/*`** (`run_worker_first`). Mọi đường dẫn khác do tầng file tĩnh của Cloudflare tự trả mà không gọi Worker, nên không tốn lượt request của gói miễn phí: file có thật thì trả file, còn lại nhận `index.html` (chế độ `single-page-application`). Từ 21/11/2026 mới dùng chế độ này, để request của bot dò quét (`/wp-login.php`, `/.env`...) và mỗi lần mở thẳng một trang sâu (`/r/:token`, `/orders/...`) không còn tính vào hạn mức. Đánh đổi đã chấp nhận: file thiếu (một gói JS cũ sau lần deploy) nhận `index.html` thay cho 404. `src/middleware/frontendMiddleware.js` (cách cũ: Worker tự trả `index.html`) giữ lại làm lưới đỡ. Chi tiết ở mục 10, phần "Tạm ngừng, chống bot và trang hạ tầng".
 - **Không còn `req`, `res`, `process.env` toàn cục.** Cấu hình và binding lấy qua `import env from "../config/env.js"` và `import { db } from "../db/d1.js"`, dùng được ở mọi file, không phải truyền `c.env` (đã thử: `import { env } from "cloudflare:workers"` có giá trị ngay lúc nạp module).
 - **Worker không giữ bộ nhớ giữa các request.** Biến cấp module chỉ là bộ đệm của một isolate, có thể mất bất cứ lúc nào. Không lưu gì cần đúng vào đó.
 - **Không dùng gói npm cần Node thật.** Phụ thuộc chạy chỉ có `hono` và `zod`. Không có mongoose, cloudinary SDK, google-auth-library, pino, socket.io, pdf-lib, image-size.
@@ -258,7 +258,7 @@ Hạn mức nằm trong dữ liệu (300 góp ý mỗi link mỗi vòng, 200 tr�
 | -------------- | --------------------------------------------------------------------- | -------------------------------- |
 | `23 * * * *`   | xóa phiên, state OAuth hết hạn, bộ đếm cũ (đã làm)                    | khung                            |
 | `23 * * * *`   | dọn `storage_trash`: xóa file trên kho theo lô                        | gói X2, vào `storageJobs.js`     |
-| `23 * * * *`   | kiểm hạn mức gói miễn phí, gửi email khi vượt 70% hoặc 90% (mục 10)   | `usageJobs.js`                   |
+| `23 * * * *`   | kiểm hạn mức gói miễn phí, gửi email khi vượt ngưỡng; dọn số đếm cũ   | `usageJobs.js`                   |
 | `41 */6 * * *` | dọn file tạm trên kho quá 1 ngày (`purgeStalePending` cũ)             | gói X2, vào `storageJobs.js`     |
 | `41 */6 * * *` | dọn bản cũ của đơn bàn giao quá 30 ngày (`purgeDeliveredVersions` cũ) | gói Y4, vào `maintenanceJobs.js` |
 
@@ -505,7 +505,21 @@ Gói miễn phí không tính tiền; chạm trần ngày (100.000 request, 100.
 - **Email qua Resend** (`services/mailService.js`), chỉ khi có `RESEND_API_KEY`. Đã tra tài liệu ngày 21/11/2026: binding `send_email` của Cloudflare bắt người gửi thuộc một tên miền đã đưa vào Cloudflare, nên không dùng được với tài khoản chỉ có `workers.dev`; Cloudflare cũng không có thông báo sẵn nào cho hạn mức ngày của Workers và D1 gói miễn phí. Resend cho gửi từ `onboarding@resend.dev` tới email của chính tài khoản Resend mà không cần tên miền; gói miễn phí 100 email mỗi ngày.
 - **`GET /api/v1/usage`** (chỉ quản trị viên): số đã ghi cộng phần isolate đang trả lời chưa kịp ghi. Hợp đồng ở `docs/api-bo-sung.md`.
 
-Đã thử trên máy dev (`qa-scripts/cf/x_kiem_muc_dung.mjs`, 26 phép, email đi vào một server giả). Chưa thử trên Cloudflare thật, và chưa gửi email thật qua Resend.
+Đã thử trên máy dev (`qa-scripts/cf/x_kiem_muc_dung.mjs`, 26 phép, email đi vào một server giả). Phiên điều phối đã thử trên bản thử: email thật gửi được.
+
+### Tạm ngừng, chống bot và trang hạ tầng (thêm 21/11/2026)
+
+Yêu cầu của chủ dự án: hết hạn mức thì người vào web phải thấy màn hình báo hết lưu lượng; lo cả trường hợp bot làm hao request; có mục "Quản lý hạ tầng" với biểu đồ.
+
+- **Tạm ngừng** (`middleware/quotaMiddleware.js`, `isPaused` trong `usageService.js`). Một chỉ số đạt `USAGE_PAUSE_PERCENT` (97) thì API trả 503 `quota_paused` cho mọi đường ngoài danh sách cho phép (`GET /auth/me`, `POST /auth/logout`, hai đường đăng nhập Google, `GET /usage`, `GET /infrastructure`). Cổng này đứng trước việc đọc body, giới hạn tần suất, đọc phiên: request bị chặn không đụng D1. Trạng thái lấy từ **bản chụp trong bộ nhớ** của isolate (tổng của ngày ở lần ghi số đếm hoặc lần đọc gần nhất, cộng phần chưa ghi), không hỏi D1. Sang ngày UTC mới thì bản chụp cũ hết giá trị: tự hết tạm ngừng. Isolate mới chưa có bản chụp thì chưa chặn. Lúc tạm ngừng, lần ghi số đếm đầu tiên vẫn chạy ngay (để email đi liền), sau đó gom 20 request một lần ghi.
+- **D1 báo chạm trần ngày**: lời lỗi chứa "free tier daily row read limit" hoặc "... row write limit" (danh sách lỗi của D1, đã tra 21/11/2026). `noteQuotaError` nhận ra, đặt bản chụp sang trạng thái tạm ngừng cứng tới hết ngày, và bộ xử lý lỗi trả cùng 503 `quota_paused` thay cho 500. Không tạo được lỗi thật trên máy dev; đã thử bằng D1 giả ném đúng lời đó (`qa-scripts/cf/x-do-lanh/thu-loi-tran-d1.mjs`, 7 phép).
+- **Đường ngoài `/api` không gọi Worker**: `wrangler.jsonc` đặt `not_found_handling: "single-page-application"` và `run_worker_first: ["/api", "/api/*"]`. Tài liệu của Cloudflare chỗ này không nhất quán (sơ đồ nói request không phải điều hướng vẫn rơi vào Worker; phần chữ nói `run_worker_first` dạng mảng tắt luật đó). Đã thử trên workerd cục bộ: 7 đường bot hay dò, không kèm header của trình duyệt, đều nhận `index.html` và Worker không bị gọi; POST nhận 405; `/api` và `/api/...` vẫn vào Worker. **Chưa thử trên Cloudflare thật.** `frontendMiddleware.js` giữ lại làm lưới đỡ.
+- **Phân loại lưu lượng** (`db/usageCounter.js`): `member` (đọc phiên thành công, đánh dấu bằng WeakSet theo object Request), `guest` (đường `/api/v1/r/<token 32 ký tự>`), `anonymous` (còn lại); cùng số 404, 429, 5xx. Ghi theo giờ vào `usage_hourly` (migration `0003`) trong cùng lô với dòng của ngày: mỗi lần ghi số đếm là hai dòng ghi, nhiều nhất 11.520 dòng mỗi ngày cho một isolate chạy dày đặc.
+- **`GET /api/v1/infrastructure`**: một lượt `readAll` (ba câu SELECT) cho cả trang; 48 giờ và 30 ngày được lấp đủ ở JavaScript. Hợp đồng ở `docs/api-bo-sung.md`. Mục `protection` có dòng "Làm nóng lúc khởi động" lấy từ `warmup/report.js`: xem trên bản chạy thật là biết việc làm nóng có chạy trọn không.
+- **Không thêm bộ giới hạn riêng cho lưu lượng không danh tính**: request không phiên vốn đã bị từ chối (401, 404) trước khi đụng D1, rẻ ngang một 429; thêm một lời gọi Rate Limiting cho mỗi request không làm giảm số request bị tính.
+- **Dọn dữ liệu đếm**: việc định kỳ mỗi giờ bỏ dòng theo giờ cũ hơn 14 ngày, dòng theo ngày và cảnh báo cũ hơn 400 ngày.
+
+Đã thử trên máy dev: `qa-scripts/cf/x_kiem_tam_ngung.mjs` 34 phép (hình dạng, quyền, đường bot không gọi Worker, phân loại, tạm ngừng, kết nối trực tiếp mã 4503, email báo tạm ngừng).
 
 ## 11. Cấu trúc thư mục, quy ước code, mẫu
 

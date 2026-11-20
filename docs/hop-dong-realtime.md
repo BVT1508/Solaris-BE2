@@ -104,6 +104,7 @@ Mọi tin là chuỗi JSON có trường `type`, trừ chuỗi trần `pong`.
 - Đăng xuất, hết phiên, rời màn review của khách: trình duyệt tự đóng (`ws.close(1000)`) và không nối lại.
 - WebSocket của trình duyệt không tự nối lại như Socket.IO: toàn bộ việc nối lại do `realtime.js` tự lo, và phải hủy hẹn giờ nối lại khi `closeRealtime()`.
 - Mã 4403 để dành (chưa dùng); gặp thì coi như 4401: không nối lại.
+- **Mã 4503: hệ thống đang tạm ngừng vì hết hạn mức gói miễn phí của hôm nay** (thêm 21/11/2026). Tin `error` ngay trước đó là `{ type: "error", status: 503, code: "quota_paused", message }`. Không nối lại; hiện màn báo hết lưu lượng như khi API trả 503 `quota_paused` (`docs/api-bo-sung.md`). Server từ chối trước khi đọc phiên hay link nên không tốn database.
 - **Vì sao trình duyệt gửi `ping` chứ không phải server** (Socket.IO thì server gửi): server giữ kết nối ở trạng thái ngủ để không tốn hạn mức; `ping` của trình duyệt được hạ tầng trả `pong` mà không đánh thức server. Server tự gửi ping thì phải thức định kỳ cho mọi kết nối.
 - Như hiện nay: frontend không tải lại dữ liệu sau khi nối lại (tin phát lúc rớt mạng bị mất), và request ghi gửi trong lúc đang nối lại không mang `X-Socket-Id`. Hai điều này do frontend quyết; server không phát lại tin cũ.
 
