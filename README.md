@@ -35,13 +35,15 @@ npm run dev
 
 Lệnh này tự áp migration vào D1 cục bộ rồi chạy `wrangler dev` ở `http://127.0.0.1:4000`.
 
-| Lệnh                    | Làm gì                                                                                 |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| `npm run db:migrate`    | áp migration vào D1 cục bộ                                                             |
-| `npm run db:reset`      | làm trống D1 cục bộ (tắt server trước); không bao giờ đụng D1 thật                     |
-| `npm run sync-frontend` | chép bản build của `Solaris FE` (`npm run build` ở repo đó trước) vào `frontend-dist/` |
-| `npm run lint`          | ESLint                                                                                 |
-| `npm run format`        | Prettier                                                                               |
+| Lệnh                    | Làm gì                                                                                        |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `npm run db:migrate`    | áp migration vào D1 cục bộ                                                                    |
+| `npm run db:reset`      | làm trống D1 cục bộ (tắt server trước); không bao giờ đụng D1 thật                            |
+| `npm run sync-frontend` | chép bản build của `Solaris FE` (`npm run build` ở repo đó trước) vào `frontend-dist/`        |
+| `npm run warmup:record` | ghi lại bản làm nóng `src/warmup/fixture.js` sau khi sửa truy vấn của một đường được làm nóng |
+| `npm run warmup:check`  | kiểm bản làm nóng còn khớp với code (chạy trước khi deploy)                                   |
+| `npm run lint`          | ESLint                                                                                        |
+| `npm run format`        | Prettier                                                                                      |
 
 Kích việc định kỳ trên máy dev: `curl "http://127.0.0.1:4000/cdn-cgi/local/scheduled?cron=23+*+*+*+*"` (theo giờ), hoặc chỉ một việc theo tên: `?cron=job:<từ khóa không dấu>`.
 

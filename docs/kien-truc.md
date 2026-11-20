@@ -433,6 +433,66 @@ Lát mẫu (đăng nhập, `me`) chỉ làm vài phép băm và một hai truy v
 
 Đọc số: phần lớn request nằm dưới 10 ms; khoảng 5% vượt (đuôi tới 23 ms) và vẫn được phục vụ nhờ dung sai của Cloudflare, là thứ không có tài liệu nên không coi là bảo đảm.
 
+### Chi phí "lần dùng đầu" của mỗi isolate, và việc làm nóng lúc nạp module
+
+**Số đo trên Cloudflare thật trước khi làm nóng** (phiên điều phối, bản thử, 21/11/2026; mỗi request ghi log mã isolate và thứ tự của request trong isolate đó; 303 request rơi vào 18 isolate trong khoảng 5 phút; `cpuTime` ms):
+
+| Nhóm request                             | Số mẫu | Trung vị | p90 | Cao nhất | Trên 10 ms |
+| ---------------------------------------- | ------ | -------- | --- | -------- | ---------- |
+| Request thứ 1 của isolate                | 18     | 9        | 16  | 24       | 39%        |
+| Request thứ 2 tới 5                      | 60     | 5        | 9   | 12       | 5%         |
+| Request thứ 6 tới 20                     | 110    | 4        | 5   | 9        | 0%         |
+| Request thứ 21 trở đi                    | 115    | 3        | 7   | 12       | 0,9%       |
+| Lần ĐẦU một đường chạy trong một isolate | 125    | 5        | 10  | 24       | 8%         |
+| Các lần sau của cùng đường               | 178    | 4        | 6   |          | 0,6%       |
+
+Tức phần vượt 10 ms gần như toàn bộ là chi phí lần chạy đầu của code trong một isolate mới (10 trên 11 request vượt 10 ms thuộc 5 request đầu của isolate và là lần đầu của đường đó), không phải chi phí thường của thao tác. Cloudflare tạo isolate mới liên tục, nên không coi là hiếm được.
+
+**Lần đầu tốn ở đâu.** Bộ đo `qa-scripts/cf/x-do-lanh` chạy code thật của `src/` trong Node, mỗi lượt một tiến trình mới (như một isolate mới), D1 là SQLite trong tiến trình nên thời gian đo là CPU thuần. Lấy mẫu CPU của riêng request đầu cho thấy chi phí **rải đều** khắp đường xử lý (Hono, middleware, đọc phiên, lớp D1, zod, service), không dồn vào một chỗ như schema zod: mỗi hàm chạy lần đầu đều phải được máy ảo biên dịch và chạy ở chế độ chậm. Đo theo thứ tự request (máy dev, ms, `POST /deliverables/:id/feedback`): request đầu của tiến trình 11,6; nếu trước đó đã chạy `GET /auth/me` thì 6,8; thêm `GET /orders` thì 5,7; thêm một đường ghi khác thì 4,5; ấm hẳn 2,0. Khoảng hai phần ba chi phí lần đầu là phần dùng chung của mọi request, phần còn lại là của riêng từng đường. Làm nóng riêng schema zod vì vậy không đủ: phải chạy cả đường xử lý.
+
+**Cách làm: chạy thử request mẫu lúc nạp module** (`src/warmup.js`). Lúc nạp module có hạn mức riêng (trần 1 giây CPU cho cả hai gói, không tính vào 10 ms của request). Worker phát lại 13 request mẫu qua CẢ app: 6 đường đọc hay gặp và 7 đường ghi đắt nhất khi lạnh (danh sách ở `scripts/record-warmup.mjs`).
+
+Lúc nạp module Worker cấm nhiều thứ (đã thử từng thứ trên workerd cục bộ, lỗi "Disallowed operation called within global scope"):
+
+| Bị cấm lúc nạp module                                    | Được phép                                            |
+| -------------------------------------------------------- | ---------------------------------------------------- |
+| gọi binding (D1, Durable Object, Rate Limiting), `fetch` | `node:crypto` `createHash`, `crypto.subtle.digest`   |
+| `setTimeout`, `waitUntil`, `AbortSignal.timeout`         | `AsyncLocalStorage`, `await` ở cấp module            |
+| `crypto.getRandomValues`, `crypto.randomUUID`            | `Math.random`, `console.log`                         |
+| tạo `Response` hoặc `Request` CÓ body, đọc body          | `Response` và `Request` không body, `Headers`, `URL` |
+| đồng hồ: `Date.now()` và `performance.now()` luôn trả 0  |                                                      |
+
+Nên request mẫu chạy "khô" (`src/config/runtime.js`, `src/warmup/dryRun.js`):
+
+- **Database giả phát lại kết quả đã ghi.** `npm run warmup:record` chạy đúng các request mẫu trên một SQLite tạm trong bộ nhớ (code thật của `src/`, module `cloudflare:workers` thay bằng bản giả) và ghi kết quả của từng truy vấn theo thứ tự vào `src/warmup/fixture.js` (26 KB, 42 lượt truy vấn). Lúc nạp module, database giả trả lại đúng các kết quả đó theo thứ tự mà không nhìn câu SQL, nên mọi dòng code của app chạy như với request thật.
+- **Cô lập bằng AsyncLocalStorage, không có cờ toàn cục.** `binding(tên)`, `waitUntil`, `randomBytes` trong `runtime.js` chỉ trả bản giả cho code chạy bên trong `runDry(...)`. Request thật chạy ngoài ngữ cảnh đó nên luôn nhận binding thật. Trong lúc chạy khô: không ghi log, không đếm mức dùng, body lấy từ ngữ cảnh thay vì đọc luồng, số ngẫu nhiên là một dãy cố định, và `Response` toàn cục trỏ tạm sang một lớp con bỏ body (trả lại ngay sau mỗi request mẫu).
+- **Tất định.** Lúc ghi, đồng hồ đứng ở 0 như lúc Worker nạp module và số ngẫu nhiên là dãy cố định, nên ghi hai lần trên cùng code cho đúng cùng một file. `npm run warmup:check` ghi thử rồi so với file đang có.
+- **Bản ghi cũ thì vô hại.** Sửa code làm đổi thứ tự truy vấn của một đường thì request mẫu của đường đó lệch bản ghi và dừng bằng lỗi bên trong chạy khô: không ảnh hưởng người dùng, chỉ là đường đó bớt được làm nóng; Worker ghi một dòng cảnh báo lúc khởi động. Mọi lỗi của việc làm nóng đều bị nuốt, không chặn Worker khởi động.
+
+**Kết quả đo bằng Node** (máy dev, `node chay.mjs 5`, ms CPU, trung vị của 5 tiến trình; "lạnh" là request ĐẦU TIÊN của tiến trình):
+
+| Đường                                | Lạnh, không làm nóng | Lạnh, có làm nóng | Ấm  |
+| ------------------------------------ | -------------------- | ----------------- | --- |
+| `GET /auth/me`                       | 5,0                  | 1,2               | 0,6 |
+| `GET /orders`                        | 6,4                  | 1,8               | 1,0 |
+| `GET /deliverables/:id/feedback`     | 6,6                  | 1,9               | 1,1 |
+| `GET /r/:token`                      | 5,9                  | 1,9               | 1,0 |
+| `POST /deliverables/:id/feedback`    | 10,1                 | 3,2               | 1,9 |
+| `POST /orders`                       | 10,2                 | 3,4               | 2,0 |
+| `POST /r/:token/feedback`            | 9,6                  | 3,9               | 2,0 |
+| `PUT /orders/:id/members`            | 9,8                  | 3,8               | 2,2 |
+| `POST /members`                      | 7,9                  | 2,6               | 1,3 |
+| `POST /deliverables/:id/share-links` | 9,2                  | 3,7               | 2,2 |
+| `POST /r/:token/submit`              | 8,7                  | 3,8               |     |
+
+Request đầu của tiến trình giảm 56% tới 75% (trung vị các đường: 8,7 xuống 3,2 ms). Lượt đo lại với 7 tiến trình mỗi đường cho cùng kết quả: giảm 59% tới 72%, trung vị 9,3 xuống 3,3 ms, thời gian nạp module tăng khoảng 24 ms. Phần chênh còn lại giữa "lạnh có làm nóng" và "ấm" gồm lần gọi đầu vào lớp SQLite của bộ đo và phần code chỉ thật sự nhanh sau nhiều lần chạy.
+
+**Giá phải trả: thời gian khởi động.** Việc làm nóng thêm khoảng 25 ms CPU lúc nạp module trên máy dev; nhân 3 tới 4 thì khoảng 75 tới 100 ms trên Cloudflare, cộng với 50 tới 90 ms hiện có. Trần là 1 giây. Thời gian này không tính vào CPU của request, nhưng request đầu tiên rơi vào một isolate mới phải chờ thêm chừng đó (thời gian chờ, không phải CPU). Số thật là `startup_time_ms` mà `wrangler deploy` in ra. (`wrangler check startup` không chạy được với Worker có Durable Object.)
+
+**Không đưa ra khỏi request được**: lần gọi thật đầu tiên tới từng binding (D1, Durable Object, Rate Limiting) vì lúc nạp module không được gọi; và các đường không có trong danh sách request mẫu (chúng vẫn hưởng phần dùng chung đã nóng).
+
+**Trạng thái**: đã chạy trên workerd cục bộ (13 request mẫu đều khớp bản ghi, không vướng điều cấm nào) và cả bộ Postman. **Chưa đo trên Cloudflare thật.** Mục tiêu của phiên điều phối: request thứ 1 của isolate trung vị dưới 6 ms và dưới 10% vượt 10 ms.
+
 ### Mức dùng theo ngày và cảnh báo
 
 Gói miễn phí không tính tiền; chạm trần ngày (100.000 request, 100.000 dòng D1 ghi, 5 triệu dòng D1 đọc, tính theo tài khoản) thì bị ngừng phục vụ tới 00:00 UTC, và Cloudflare không báo trước. Hệ thống tự đếm ba chỉ số đó và báo sớm (`services/usageService.js`, bảng ở `migrations/0002_usage.sql`).
@@ -635,7 +695,9 @@ Gói miễn phí cho 10 ms CPU mỗi request (thời gian chờ database và kho
 4. **Không làm việc nặng ở request đầu của isolate.** Thứ gì dựng một lần thì dựng lúc nạp module (schema zod, bảng tra, bảng định tuyến): lúc nạp module có hạn mức riêng. Không gọi database "để khởi tạo" trên đường của request thường.
 5. **Lượt đi về tới D1 rẻ (khoảng 0,5 ms)**, không cần đổi cấu trúc code để bớt một hai lượt. Vẫn không gọi D1 trong vòng lặp; nhiều câu đọc độc lập thì `readAll` cho gọn và nhanh hơn về thời gian chờ.
 6. **Việc sau response vẫn tính CPU.** `runAfterResponse` (báo trực tiếp, dọn thùng rác kho) dùng chung hạn mức của request: giữ việc nền nhỏ.
-7. **Không cần tối ưu**: middleware, header, log, kiểm zod của body thường (0,1 ms), băm, ký URL, sinh id, Rate Limiting binding, lời gọi Durable Object.
+7. **Không gọi thẳng thứ mà Worker cấm lúc nạp module** ở đường request thường đi qua: binding lấy bằng `binding("TÊN")`, việc sau response bằng `runAfterResponse` (hoặc `waitUntil` của `config/runtime.js`), số ngẫu nhiên bằng `newId`, `randomToken`, `randomHex` (đều qua `randomBytes` của `runtime.js`). Gọi thẳng `env.DB`, `crypto.getRandomValues` hay đọc body ở chỗ khác thì request mẫu lúc làm nóng vấp điều cấm ở đó và đường ấy không còn được làm nóng.
+8. **Sửa truy vấn của một đường có trong danh sách làm nóng thì ghi lại bản làm nóng**: `npm run warmup:record`, commit `src/warmup/fixture.js`. `npm run warmup:check` báo khi quên. Thêm request mẫu thì đo lại (`qa-scripts/cf/x-do-lanh`): mỗi request mẫu tốn thêm thời gian khởi động.
+9. **Không cần tối ưu**: middleware, header, log, kiểm zod của body thường (0,1 ms), băm, ký URL, sinh id, Rate Limiting binding, lời gọi Durable Object.
 
 ### Điều frontend dựa vào, dễ lệch khi viết lại
 

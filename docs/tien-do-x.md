@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Bàn giao (đọc mục này trước nếu vừa mất context)
 
-Cập nhật lần cuối: 21/11/2026. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+Cập nhật lần cuối: 21/11/2026, sau đợt làm nóng. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
 
 **Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
 
@@ -62,6 +62,21 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 - Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
 
 **Tin của phiên điều phối chưa làm xong:** không còn. Việc mới nhất là đợt 21/11 (đếm mức dùng và cảnh báo), đã xong phần code và thử trên máy dev, chờ phiên điều phối áp migration `0002` và deploy; xem mục "Đợt 21/11". Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+
+## Đợt 21/11 (tiếp): giảm CPU vòng hai, làm nóng lúc nạp module
+
+Phiên điều phối đo trên bản thử: request thứ 1 của một isolate tốn trung vị 9 ms (39% trên 10 ms), isolate ấm thì 3 tới 4 ms; 18 isolate cho 303 request. Việc giao: đưa chi phí lần dùng đầu ra khỏi request, vào lúc nạp module. Chi tiết và số đo: `docs/kien-truc.md` mục 10, phần "Chi phí lần dùng đầu".
+
+- [x] **Tìm nguyên nhân**: bộ đo mới `qa-scripts/cf/x-do-lanh` (code thật của `src/` chạy trong Node, mỗi lượt một tiến trình, D1 là SQLite trong tiến trình; có `README.md`). Chi phí lần đầu rải đều cả đường xử lý, khoảng hai phần ba là phần dùng chung của mọi request; làm nóng riêng zod không đủ.
+- [x] **Làm nóng**: `src/warmup.js` phát lại 13 request mẫu qua cả app lúc nạp module, chạy "khô": `src/config/runtime.js` (ngữ cảnh AsyncLocalStorage; `binding`, `waitUntil`, `randomBytes`), `src/warmup/dryRun.js` (database giả phát lại, `Response` không body), `src/warmup/fixture.js` (sinh tự động). Ghi lại bằng `npm run warmup:record` (`scripts/record-warmup.mjs`, `scripts/warmup/`); kiểm bằng `npm run warmup:check`.
+- [x] Các chỗ chuyển sang đi qua `runtime.js`: `db/d1.js` (`db()`, không đếm lúc chạy khô), `middleware/rateLimitMiddleware.js`, `middleware/bodyMiddleware.js` (body lấy từ ngữ cảnh khi chạy khô), `utils/realtime.js`, `utils/background.js`, `utils/hash.js`, `utils/id.js`, `utils/logger.js` (im lặng khi chạy khô). Hành vi với request thật không đổi.
+- [x] Điều Worker cấm lúc nạp module đã thử từng thứ trên workerd cục bộ (bảng ở mục 10): đáng nhớ nhất là KHÔNG tạo được `Response` hay `Request` có body, và `Date.now()` trả 0.
+
+Kết quả, tất cả trên **máy dev**: bộ đo Node cho request đầu của tiến trình giảm 56% tới 75% (trung vị các đường 8,7 xuống 3,2 ms; ấm 0,6 tới 2,2); việc làm nóng thêm khoảng 25 ms lúc nạp module. Trên `wrangler dev` (workerd thật): 13 request mẫu đều khớp bản ghi, không vướng điều cấm; cả bộ Postman 406 request 1377/1377 (`ket-qua/2026-11-21_020709_x-lam-nong`), server không nạp lại; `x_kiem_gop_y_team` 68/68; số đếm mức dùng vẫn ghi; `npm run lint` và `npm run warmup:check` sạch. **Chưa đo trên Cloudflare thật**: `startup_time_ms` thật (ước 130 tới 190 ms, trần 1 giây) và `cpuTime` của request thứ 1 chờ phiên điều phối deploy bản thử và đo lại.
+
+Bẫy mới: sửa code làm đổi truy vấn của một đường được làm nóng mà quên `npm run warmup:record` thì không lỗi gì, nhưng đường đó thôi được làm nóng (log khởi động có "Bản ghi làm nóng đã cũ"). `wrangler check startup` không chạy được vì Worker có Durable Object.
+
+File dùng chung đã sửa đợt này: `src/index.js`, `src/db/d1.js`, `src/middleware/bodyMiddleware.js`, `src/middleware/rateLimitMiddleware.js`, `src/utils/{realtime,background,hash,id,logger}.js`, `package.json`.
 
 ## Đợt 21/11: đếm mức dùng gói miễn phí và cảnh báo
 
