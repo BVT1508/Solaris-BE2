@@ -1,3 +1,5 @@
+import { pausedResponse } from "../middleware/quotaMiddleware.js";
+import { noteQuotaError } from "../services/usageService.js";
 import env from "../config/env.js";
 import { toAppError } from "../db/d1.js";
 import AppError from "../utils/appError.js";
@@ -22,6 +24,10 @@ export const notFound = (c) => {
  */
 export const globalErrorHandler = (err, c) => {
   let error = err;
+
+  // D1 báo tài khoản đã chạm trần ngày của gói miễn phí: không phải lỗi của hệ thống. Chuyển sang tạm ngừng và trả lời
+  // như mọi request bị chặn lúc tạm ngừng, thay cho 500.
+  if (noteQuotaError(err)) return pausedResponse(c);
 
   // Lỗi của D1 có nghĩa với người dùng (trùng khóa duy nhất, dữ liệu vừa đổi): đổi thành lời tiếng Việt.
   if (!error.isOperational) error = toAppError(error) || error;

@@ -1,3 +1,4 @@
+import { markMember } from "../db/usageCounter.js";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import env from "../config/env.js";
 import * as authService from "../services/authService.js";
@@ -145,6 +146,7 @@ export const protect = async (c, next) => {
     throw new AppError("Bạn chưa đăng nhập hoặc phiên đã hết hạn.", 401);
   }
   c.set("member", resolved.member);
+  markMember(c.req.raw);
   // socketId: kết nối trực tiếp của chính tab này, để thay đổi do nó gây ra không báo ngược lại cho nó.
   c.set("actor", { ...resolved.actor, socketId: socketIdOf(c) });
   await next();

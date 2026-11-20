@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { globalErrorHandler, notFound } from "./controllers/errorController.js";
 import { parseBody } from "./middleware/bodyMiddleware.js";
+import { pauseGate } from "./middleware/quotaMiddleware.js";
 import { serveFrontend } from "./middleware/frontendMiddleware.js";
 import { apiLimiter } from "./middleware/rateLimitMiddleware.js";
 import {
@@ -49,6 +50,9 @@ app.use(async (c, next) => {
     "request"
   );
 });
+
+// Sắp hết hạn mức gói miễn phí của hôm nay: trả 503 "quota_paused" ngay, trước khi đọc body hay đụng database.
+app.use("/api/v1/*", pauseGate);
 
 app.use(parseBody);
 

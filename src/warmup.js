@@ -2,6 +2,7 @@ import app from "./app.js";
 import logger from "./utils/logger.js";
 import { dryFetch, replayDb } from "./warmup/dryRun.js";
 import fixture from "./warmup/fixture.js";
+import { warmupReport } from "./warmup/report.js";
 
 /**
  * Làm nóng lúc nạp module: chạy thử các request mẫu qua CẢ app (bộ định tuyến, middleware, kiểm zod, service, dựng câu
@@ -20,7 +21,7 @@ import fixture from "./warmup/fixture.js";
  * lệch bản ghi: KHÔNG gây lỗi gì cho người dùng, chỉ là đường đó bớt được làm nóng. `npm run warmup:check` báo khi lệch;
  * chạy lại `npm run warmup:record` và commit fixture.js.
  */
-export const warmupReport = { requests: 0, stale: [] };
+export { warmupReport };
 
 async function warmUp() {
   for (const entry of fixture.requests) {

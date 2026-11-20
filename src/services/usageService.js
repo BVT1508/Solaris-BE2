@@ -1,22 +1,36 @@
 import { waitUntil } from "cloudflare:workers";
 import env from "../config/env.js";
-import { batch, first, run, sql } from "../db/d1.js";
-import { pendingUsage, restoreUsage, takeUsage } from "../db/usageCounter.js";
+import { binding } from "../config/runtime.js";
+import { batch, first, readAll, run, sql } from "../db/d1.js";
+import {
+  isEmptyUsage,
+  peekUsage,
+  pendingUsage,
+  restoreUsage,
+  takeUsage,
+} from "../db/usageCounter.js";
 import logger from "../utils/logger.js";
 import { now } from "../utils/time.js";
+import { warmupReport } from "../warmup/report.js";
 import { mailEnabled, sendMail } from "./mailService.js";
 
 /**
- * Mức dùng gói miễn phí của Cloudflare trong ngày (UTC) và cảnh báo sớm cho quản trị viên.
+ * Mức dùng gói miễn phí của Cloudflare trong ngày (UTC): đếm, cảnh báo sớm, tạm ngừng khi sắp hết, và số liệu cho trang
+ * "Quản lý hạ tầng".
  *
  * Gói miễn phí không tính tiền: chạm trần thì request (hoặc mọi truy vấn D1) lỗi tới 00:00 UTC, và Cloudflare không báo
  * trước. Nên Worker tự đếm ba chỉ số có trần theo ngày: request vào Worker, dòng D1 đọc, dòng D1 ghi.
  *
  * Cách đếm, để không thêm lượt đi về nào tới D1 trên đường xử lý request:
- *   1. Mỗi request và mỗi kết quả D1 chỉ cộng vào ba con số trong bộ nhớ của isolate (db/usageCounter.js).
+ *   1. Mỗi request và mỗi kết quả D1 chỉ cộng vào vài con số trong bộ nhớ của isolate (db/usageCounter.js).
  *   2. Request đầu tiên sau một lần ghi hẹn một lần ghi xuống D1 sau USAGE_FLUSH_SECONDS giây (mặc định 15), chạy sau
- *      response bằng waitUntil. Mọi request tới trong khoảng đó đi chung MỘT câu UPSERT (một dòng ghi).
- *      Tải dày đặc cả ngày: nhiều nhất 5.760 dòng ghi cho mỗi isolate; thưa thì mỗi đợt request một dòng ghi.
+ *      response bằng waitUntil. Mọi request tới trong khoảng đó đi chung MỘT lô hai câu UPSERT: dòng của ngày và dòng
+ *      của giờ hiện tại (hai dòng ghi). Tải dày đặc cả ngày: nhiều nhất 11.520 dòng ghi cho mỗi isolate.
+ *
+ * Tạm ngừng: khi một chỉ số đạt USAGE_PAUSE_PERCENT (mặc định 97%) của trần, API trả 503 "quota_paused" cho mọi đường
+ * ngoài danh sách cho phép (middleware/quotaMiddleware.js). Dừng trước 100% để quản trị viên còn vào xem được và để D1
+ * không rơi vào trạng thái mọi truy vấn lỗi. Trạng thái lấy từ bản chụp trong bộ nhớ (`snapshot`), làm mới mỗi lần ghi
+ * số đếm: không hỏi D1 trên đường của request. Isolate mới chưa có bản chụp thì chưa chặn, tới lần ghi đầu tiên mới biết.
  *
  * Số đếm là ƯỚC LƯỢNG, thường thấp hơn số thật của Cloudflare:
  *   - isolate bị tắt trong lúc chờ ghi thì mất phần chưa ghi;
@@ -24,6 +38,7 @@ import { mailEnabled, sendMail } from "./mailService.js";
  *     khác (bản thử), của `wrangler d1 execute`, của việc áp migration, của trang quản trị Cloudflare đều ăn chung
  *     hạn mức mà không nằm trong số này;
  *   - lô ghi bị hoàn tác (guard sai) vẫn bị Cloudflare tính dòng đọc, ở đây không đếm được.
+ * Vì vậy còn một lớp nữa: khi chính D1 báo đã chạm trần ngày (`noteQuotaError`), hệ thống cũng chuyển sang tạm ngừng.
  */
 const METRICS = [
   {
@@ -42,18 +57,31 @@ const METRICS = [
     limit: () => env.USAGE_LIMIT_ROWS_READ,
   },
 ];
+const LABEL = Object.fromEntries(
+  METRICS.map((metric) => [metric.key, metric.label])
+);
 
-/** Ngưỡng cảnh báo, phần trăm của trần, từ thấp tới cao. */
+/** Ngưỡng theo phần trăm của trần, từ thấp tới cao: cảnh báo, nguy cấp, tạm ngừng. */
 const THRESHOLDS = [
   { percent: 70, level: "warning" },
   { percent: 90, level: "critical" },
-];
-const LEVEL_RANK = { ok: 0, warning: 1, critical: 2 };
+  { percent: env.USAGE_PAUSE_PERCENT, level: "paused" },
+].sort((a, b) => a.percent - b.percent);
+const LEVEL_RANK = { ok: 0, warning: 1, critical: 2, paused: 3 };
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const HOURS_SHOWN = 48;
+const DAYS_SHOWN = 30;
+const HOURLY_KEPT_DAYS = 14;
+const DAILY_KEPT_DAYS = 400;
 
 const today = () => new Date().toISOString().slice(0, 10);
+/** Khóa của giờ hiện tại trong bảng usage_hourly: 'YYYY-MM-DDTHH' (UTC). */
+const hourKey = (date = new Date()) => date.toISOString().slice(0, 13);
 
 /** 00:00 UTC kế tiếp: lúc Cloudflare đặt lại hạn mức ngày. */
-const nextReset = () => {
+export const nextReset = () => {
   const d = new Date();
   return new Date(
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)
@@ -71,6 +99,8 @@ const levelOf = (used, limit) => {
   return level;
 };
 
+const percentOf = (used, limit) => Math.round((used / limit) * 1000) / 10;
+
 const toMetric = (metric, used) => {
   const limit = metric.limit();
   return {
@@ -78,10 +108,17 @@ const toMetric = (metric, used) => {
     label: metric.label,
     used,
     limit,
-    percent: Math.round((used / limit) * 1000) / 10,
+    percent: percentOf(used, limit),
     level: levelOf(used, limit),
   };
 };
+
+const topLevel = (metrics) =>
+  metrics.reduce(
+    (top, metric) =>
+      LEVEL_RANK[metric.level] > LEVEL_RANK[top] ? metric.level : top,
+    "ok"
+  );
 
 const toTotals = (row) => ({
   requests: row?.requests || 0,
@@ -89,47 +126,128 @@ const toTotals = (row) => ({
   rowsWritten: row?.rows_written || 0,
 });
 
+// ---------- Bản chụp trong bộ nhớ và trạng thái tạm ngừng ----------
+
+/**
+ * Tổng của ngày lần gần nhất isolate này biết (sau một lần ghi số đếm hoặc một lần đọc). `hard`: chính D1 đã báo chạm
+ * trần ngày. Bản chụp của ngày cũ không còn giá trị: sang ngày mới (UTC) là tự hết tạm ngừng mà không cần hỏi D1.
+ */
+let snapshot = { day: "", totals: toTotals(null), hard: false };
+
+const remember = (day, totals) => {
+  snapshot = { day, totals, hard: snapshot.day === day && snapshot.hard };
+};
+
+/** true khi hệ thống đang tạm ngừng vì sắp hết (hoặc đã hết) hạn mức của hôm nay. Không gọi D1. */
+export function isPaused() {
+  if (!snapshot.day || snapshot.day !== today()) return false;
+  if (snapshot.hard) return true;
+  // Cộng cả phần isolate này chưa kịp ghi xuống, để tạm ngừng có hiệu lực ngay khi chạm ngưỡng.
+  const pending = peekUsage();
+  for (const metric of METRICS) {
+    if (
+      reached(
+        snapshot.totals[metric.key] + pending[metric.key],
+        metric.limit(),
+        env.USAGE_PAUSE_PERCENT
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Lời của D1 khi tài khoản gói miễn phí chạm trần ngày (danh sách lỗi ở developers.cloudflare.com/d1/observability/debug-d1/):
+// "Your account has exceeded D1's free tier daily row read limit." và "... daily row write limit."
+const QUOTA_ERROR = /free tier daily row (read|write) limit/i;
+
+/** Lỗi là do D1 đã chạm trần ngày thì chuyển sang tạm ngừng tới hết ngày và trả true. */
+export function noteQuotaError(err) {
+  if (!QUOTA_ERROR.test(String(err?.message || ""))) return false;
+  const day = today();
+  snapshot = {
+    day,
+    totals: snapshot.day === day ? snapshot.totals : toTotals(null),
+    hard: true,
+  };
+  return true;
+}
+
 // ---------- Ghi số đếm xuống D1 ----------
 
-// Bảng chưa có (chưa áp migration 0002): thôi thử một lúc, để không lỗi và ghi log ở mọi request.
+// Bảng chưa có (chưa áp migration 0002, 0003): thôi thử một lúc, để không lỗi và ghi log ở mọi request.
 const RETRY_AFTER_MISSING_TABLE_MS = 10 * 60 * 1000;
 let pausedUntil = 0;
 
 /**
- * Ghi phần đang nằm trong bộ nhớ xuống D1 (một câu UPSERT). Trả tổng của ngày sau khi ghi, hoặc null nếu không có gì
- * để ghi hoặc ghi không được. Không bao giờ ném lỗi: việc đếm không được làm hỏng request hay việc định kỳ.
+ * Ghi phần đang nằm trong bộ nhớ xuống D1: một lô gồm dòng của ngày và dòng của giờ hiện tại. Trả tổng của ngày sau khi
+ * ghi, hoặc null nếu không có gì để ghi hoặc ghi không được. Không bao giờ ném lỗi: việc đếm không được làm hỏng
+ * request hay việc định kỳ.
  */
 export async function flushUsage() {
   if (Date.now() < pausedUntil) return null;
   const delta = takeUsage();
-  if (!delta.requests && !delta.rowsRead && !delta.rowsWritten) return null;
+  if (isEmptyUsage(delta)) return null;
+  const day = today();
+  const at = now();
   try {
-    const row = await first(sql`
-      INSERT INTO usage_daily (day, requests, rows_read, rows_written, updated_at)
-      VALUES (${today()}, ${delta.requests}, ${delta.rowsRead}, ${delta.rowsWritten}, ${now()})
-      ON CONFLICT (day) DO UPDATE SET
-        requests = requests + excluded.requests,
-        rows_read = rows_read + excluded.rows_read,
-        rows_written = rows_written + excluded.rows_written,
-        updated_at = excluded.updated_at
-      RETURNING requests, rows_read, rows_written`);
-    return toTotals(row);
+    const [daily] = await batch([
+      sql`
+        INSERT INTO usage_daily (day, requests, rows_read, rows_written, member, guest, anonymous, updated_at)
+        VALUES (${day}, ${delta.requests}, ${delta.rowsRead}, ${delta.rowsWritten},
+                ${delta.member}, ${delta.guest}, ${delta.anonymous}, ${at})
+        ON CONFLICT (day) DO UPDATE SET
+          requests = requests + excluded.requests,
+          rows_read = rows_read + excluded.rows_read,
+          rows_written = rows_written + excluded.rows_written,
+          member = member + excluded.member,
+          guest = guest + excluded.guest,
+          anonymous = anonymous + excluded.anonymous,
+          updated_at = excluded.updated_at
+        RETURNING requests, rows_read, rows_written`,
+      sql`
+        INSERT INTO usage_hourly (hour, requests, rows_read, rows_written, member, guest, anonymous,
+                                  status_404, status_429, status_5xx, updated_at)
+        VALUES (${hourKey()}, ${delta.requests}, ${delta.rowsRead}, ${delta.rowsWritten},
+                ${delta.member}, ${delta.guest}, ${delta.anonymous},
+                ${delta.status404}, ${delta.status429}, ${delta.status5xx}, ${at})
+        ON CONFLICT (hour) DO UPDATE SET
+          requests = requests + excluded.requests,
+          rows_read = rows_read + excluded.rows_read,
+          rows_written = rows_written + excluded.rows_written,
+          member = member + excluded.member,
+          guest = guest + excluded.guest,
+          anonymous = anonymous + excluded.anonymous,
+          status_404 = status_404 + excluded.status_404,
+          status_429 = status_429 + excluded.status_429,
+          status_5xx = status_5xx + excluded.status_5xx,
+          updated_at = excluded.updated_at`,
+    ]);
+    const totals = toTotals(daily.rows[0]);
+    remember(day, totals);
+    return totals;
   } catch (err) {
-    if (/no such table/i.test(String(err?.message))) {
+    if (/no such table|has no column named/i.test(String(err?.message))) {
       pausedUntil = Date.now() + RETRY_AFTER_MISSING_TABLE_MS;
       logger.warn(
-        "Chưa có bảng usage_daily (chưa áp migration 0002): tạm không đếm mức dùng"
+        "Chưa có bảng đếm mức dùng (chưa áp migration 0002, 0003): tạm không đếm"
       );
     } else {
-      // Lỗi tạm (kể cả khi D1 đã hết hạn mức ghi trong ngày): giữ số lại, lượt sau ghi tiếp.
+      // Lỗi tạm: giữ số lại, lượt sau ghi tiếp. D1 báo chạm trần ngày thì chuyển sang tạm ngừng.
       restoreUsage(delta);
-      logger.warn({ err }, "Không ghi được số đếm mức dùng");
+      if (!noteQuotaError(err)) {
+        logger.warn({ err }, "Không ghi được số đếm mức dùng");
+      }
     }
     return null;
   }
 }
 
 let flushScheduled = false;
+// Lúc tạm ngừng, request bị chặn gần như không tốn gì: không để mỗi đợt request tốn hai dòng ghi, gom chừng này request một lần ghi.
+const PAUSED_FLUSH_EVERY = 20;
+let pauseFlushedDay = "";
 
 /**
  * Gọi ở mỗi request (điểm vào của Worker). Nếu chưa có lần ghi nào đang hẹn thì hẹn một lần, chạy sau response.
@@ -137,6 +255,14 @@ let flushScheduled = false;
  */
 export function scheduleUsageFlush() {
   if (flushScheduled) return;
+  if (isPaused()) {
+    // Lần ghi đầu tiên sau khi vào tạm ngừng thì ghi ngay (để ngưỡng tạm ngừng được ghi nhận và email đi liền);
+    // các lần sau mới gom.
+    const day = today();
+    if (pauseFlushedDay === day) {
+      if (peekUsage().requests < PAUSED_FLUSH_EVERY) return;
+    } else pauseFlushedDay = day;
+  }
   flushScheduled = true;
   waitUntil(
     (async () => {
@@ -167,24 +293,207 @@ const readTotals = async (day) =>
     )
   );
 
-/** Mức dùng hôm nay cho GET /api/v1/usage: số đã ghi xuống cộng phần isolate này chưa kịp ghi. */
-export async function getUsage() {
-  const day = today();
-  const stored = await readTotals(day);
+/** Ba chỉ số của hôm nay từ số đã ghi (`stored`) cộng phần isolate này chưa kịp ghi. D1 đã báo chạm trần thì mức chung là paused. */
+const todayView = (stored) => {
   const pending = pendingUsage();
   const metrics = METRICS.map((metric) =>
     toMetric(metric, stored[metric.key] + pending[metric.key])
   );
+  return { metrics, level: snapshot.hard ? "paused" : topLevel(metrics) };
+};
+
+/** Mức dùng hôm nay cho GET /api/v1/usage. */
+export async function getUsage() {
+  const day = today();
+  const stored = await readTotals(day);
+  remember(day, stored);
+  const { metrics, level } = todayView(stored);
+  return { day, resetAt: nextReset(), estimated: true, level, metrics };
+}
+
+const addInto = (target, source, keys) => {
+  for (const key of keys) target[key] += source[key] || 0;
+};
+const COUNT_KEYS = [
+  "requests",
+  "rowsRead",
+  "rowsWritten",
+  "member",
+  "guest",
+  "anonymous",
+];
+const STATUS_KEYS = ["status404", "status429", "status5xx"];
+
+/** Các lớp bảo vệ hạn mức, để trang hạ tầng hiển thị cái nào đang bật. */
+const protectionList = () => {
+  const warmed =
+    warmupReport.requests > 0
+      ? warmupReport.requests - warmupReport.stale.length
+      : 0;
+  return [
+    {
+      key: "static_assets",
+      label: "File tĩnh và đường dẫn ngoài /api không gọi Worker",
+      active: true,
+      detail:
+        "Cloudflare tự trả giao diện và mọi đường dẫn không bắt đầu bằng /api (kể cả đường bot dò quét), không tính vào hạn mức request.",
+    },
+    {
+      key: "robots",
+      label: "robots.txt cấm thu thập",
+      active: true,
+      detail:
+        "Bộ thu thập tử tế sẽ không quét trang; bot xấu thì bỏ qua file này.",
+    },
+    {
+      key: "rate_limits",
+      label: "Giới hạn tần suất theo IP",
+      active: Boolean(binding("API_LIMITER")),
+      detail:
+        "Mỗi IP: 600 request API mỗi phút, 10 lần đăng nhập, 120 lần mở link chia sẻ, 60 lần ghi của khách. Giảm tải cho database; request bị chặn vẫn tính vào hạn mức request.",
+    },
+    {
+      key: "anonymous_no_database",
+      label: "Request chưa đăng nhập không đụng database",
+      active: true,
+      detail:
+        "Không có cookie phiên và không phải đường của link chia sẻ thì bị từ chối trước khi hỏi database.",
+    },
+    {
+      key: "pause",
+      label: "Tạm ngừng khi sắp hết hạn mức",
+      active: true,
+      detail: `Khi một chỉ số đạt ${env.USAGE_PAUSE_PERCENT}% hạn mức ngày, API trả thông báo hết lưu lượng tới 07:00 (giờ Việt Nam); quản trị viên vẫn vào xem được.`,
+    },
+    {
+      key: "email_alerts",
+      label: "Email cảnh báo",
+      active: mailEnabled(),
+      detail: mailEnabled()
+        ? `Gửi tới chủ hệ thống khi một chỉ số qua 70%, 90% và ${env.USAGE_PAUSE_PERCENT}%.`
+        : "Chưa đặt khóa RESEND_API_KEY nên chưa gửi email; ngưỡng đã vượt vẫn được ghi nhận.",
+    },
+    {
+      key: "warmup",
+      label: "Làm nóng lúc khởi động",
+      active: warmupReport.requests > 0 && warmupReport.stale.length === 0,
+      detail: `${warmed}/${warmupReport.requests} request mẫu chạy trọn lúc nạp module, để request đầu của mỗi tiến trình tốn ít CPU hơn.`,
+    },
+    {
+      key: "waf",
+      label: "Chặn bot trước khi vào Worker (WAF)",
+      active: false,
+      detail:
+        "Địa chỉ workers.dev không có tường lửa: request tới /api đã vào Worker là đã bị tính. Cần tên miền riêng trên Cloudflare để dùng luật WAF, giới hạn tần suất ở biên và Bot Fight Mode.",
+    },
+  ];
+};
+
+/**
+ * Mọi số liệu của trang "Quản lý hạ tầng" trong MỘT lượt hỏi D1: hôm nay, 48 giờ gần nhất, 30 ngày gần nhất,
+ * 20 cảnh báo mới nhất, và các lớp bảo vệ. Giờ và ngày không có dữ liệu vẫn có mặt với số 0, cũ trước mới sau.
+ */
+export async function getInfrastructure() {
+  const current = new Date();
+  const day = today();
+  const hourBase = Date.UTC(
+    current.getUTCFullYear(),
+    current.getUTCMonth(),
+    current.getUTCDate(),
+    current.getUTCHours()
+  );
+  const dayBase = Date.UTC(
+    current.getUTCFullYear(),
+    current.getUTCMonth(),
+    current.getUTCDate()
+  );
+  const hourSlots = Array.from({ length: HOURS_SHOWN }, (_, index) => {
+    const start = new Date(hourBase - (HOURS_SHOWN - 1 - index) * HOUR_MS);
+    return { key: hourKey(start), hour: start.toISOString() };
+  });
+  const daySlots = Array.from({ length: DAYS_SHOWN }, (_, index) =>
+    new Date(dayBase - (DAYS_SHOWN - 1 - index) * DAY_MS)
+      .toISOString()
+      .slice(0, 10)
+  );
+
+  const [dailyRows, hourlyRows, alertRows] = await readAll([
+    sql`SELECT day, requests, rows_read, rows_written, member, guest, anonymous
+        FROM usage_daily WHERE day >= ${daySlots[0]}`,
+    sql`SELECT hour, requests, rows_read, rows_written, member, guest, anonymous, status_404, status_429, status_5xx
+        FROM usage_hourly WHERE hour >= ${hourSlots[0].key}`,
+    sql`SELECT day, metric, threshold, emailed_at FROM usage_alerts
+        ORDER BY created_at DESC, threshold DESC LIMIT 20`,
+  ]);
+
+  const pending = pendingUsage();
+  const byDay = new Map(dailyRows.map((row) => [row.day, row]));
+  const byHour = new Map(hourlyRows.map((row) => [row.hour, row]));
+  const stored = toTotals(byDay.get(day));
+  remember(day, stored);
+  const { metrics, level } = todayView(stored);
+
+  const hourly = hourSlots.map(({ key, hour }, index) => {
+    const row = byHour.get(key);
+    const item = {
+      hour,
+      requests: row?.requests || 0,
+      rowsRead: row?.rows_read || 0,
+      rowsWritten: row?.rows_written || 0,
+      member: row?.member || 0,
+      guest: row?.guest || 0,
+      anonymous: row?.anonymous || 0,
+      status404: row?.status_404 || 0,
+      status429: row?.status_429 || 0,
+      status5xx: row?.status_5xx || 0,
+    };
+    // Giờ hiện tại (phần tử cuối): cộng phần isolate này chưa kịp ghi.
+    if (index === HOURS_SHOWN - 1) {
+      addInto(item, pending, COUNT_KEYS);
+      addInto(item, pending, STATUS_KEYS);
+    }
+    return item;
+  });
+
+  const daily = daySlots.map((slot, index) => {
+    const row = byDay.get(slot);
+    const item = {
+      day: slot,
+      requests: row?.requests || 0,
+      rowsRead: row?.rows_read || 0,
+      rowsWritten: row?.rows_written || 0,
+      member: row?.member || 0,
+      guest: row?.guest || 0,
+      anonymous: row?.anonymous || 0,
+    };
+    if (index === DAYS_SHOWN - 1) addInto(item, pending, COUNT_KEYS);
+    // Mức cao nhất trong ba chỉ số của ngày đó, tính theo trần hiện tại.
+    item.peakPercent = Math.max(
+      ...METRICS.map((metric) => percentOf(item[metric.key], metric.limit()))
+    );
+    return item;
+  });
+
+  const url = new URL(env.FRONTEND_URL);
   return {
+    plan: "Workers Free",
+    worker: { name: url.hostname.split(".")[0], url: env.FRONTEND_URL },
     day,
     resetAt: nextReset(),
     estimated: true,
-    level: metrics.reduce(
-      (top, metric) =>
-        LEVEL_RANK[metric.level] > LEVEL_RANK[top] ? metric.level : top,
-      "ok"
-    ),
+    level,
+    pausePercent: env.USAGE_PAUSE_PERCENT,
     metrics,
+    hourly,
+    daily,
+    alerts: alertRows.map((row) => ({
+      day: row.day,
+      metric: row.metric,
+      label: LABEL[row.metric] || row.metric,
+      threshold: row.threshold,
+      emailedAt: row.emailed_at,
+    })),
+    protection: protectionList(),
   };
 }
 
@@ -282,6 +591,7 @@ export async function checkUsage() {
   await flushUsage();
   const day = today();
   const totals = await readTotals(day);
+  remember(day, totals);
   const alerts = await processAlerts(day, totals);
   return {
     day,
@@ -295,12 +605,30 @@ export async function checkUsage() {
   };
 }
 
+/** Việc định kỳ: bỏ số đếm theo giờ cũ hơn 14 ngày, số đếm theo ngày và cảnh báo cũ hơn 400 ngày. */
+export async function purgeOldUsage() {
+  const hourCutoff = hourKey(new Date(Date.now() - HOURLY_KEPT_DAYS * DAY_MS));
+  const dayCutoff = new Date(Date.now() - DAILY_KEPT_DAYS * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  const [hourly, daily, alerts] = await batch([
+    sql`DELETE FROM usage_hourly WHERE hour < ${hourCutoff}`,
+    sql`DELETE FROM usage_daily WHERE day < ${dayCutoff}`,
+    sql`DELETE FROM usage_alerts WHERE day < ${dayCutoff}`,
+  ]);
+  return {
+    hourly: hourly.changes,
+    daily: daily.changes,
+    alerts: alerts.changes,
+  };
+}
+
 // ---------- Nội dung email ----------
 
 const number = (value) => value.toLocaleString("vi-VN");
 const percentText = (value) => `${String(value).replace(".", ",")}%`;
 
-/** Một email cho mọi ngưỡng vừa vượt trong lượt kiểm này; chỉ số vượt cả 70% và 90% cùng lúc thì chỉ nêu ngưỡng 90%. */
+/** Một email cho mọi ngưỡng vừa vượt trong lượt kiểm này; chỉ số vượt nhiều ngưỡng cùng lúc thì chỉ nêu ngưỡng cao nhất. */
 function buildAlertMail(day, totals, claimedRows) {
   const highest = new Map();
   for (const row of claimedRows) {
@@ -314,12 +642,24 @@ function buildAlertMail(day, totals, claimedRows) {
     .filter((metric) => highest.has(metric.key))
     .sort((a, b) => b.percent - a.percent);
   const top = crossed[0];
-  const critical = [...highest.values()].some((threshold) => threshold >= 90);
+  const worst = Math.max(...highest.values());
+  const paused = worst >= env.USAGE_PAUSE_PERCENT;
   const host = new URL(env.FRONTEND_URL).host;
 
-  const subject = `[Solaris] ${critical ? "Sắp chạm trần gói miễn phí" : "Cảnh báo hạn mức gói miễn phí"}: ${top.label} đã dùng ${percentText(top.percent)}`;
+  let headline = "Cảnh báo hạn mức gói miễn phí";
+  if (paused) headline = "Hệ thống đã tạm ngừng vì sắp hết hạn mức";
+  else if (worst >= 90) headline = "Sắp chạm trần gói miễn phí";
+
+  const subject = `[Solaris] ${headline}: ${top.label} đã dùng ${percentText(top.percent)}`;
   const text = [
-    `Bản Solaris tại ${env.FRONTEND_URL} vừa vượt ngưỡng cảnh báo của gói miễn phí Cloudflare trong ngày ${day} (giờ UTC).`,
+    paused
+      ? `Bản Solaris tại ${env.FRONTEND_URL} đã TẠM NGỪNG phục vụ: một chỉ số đã đạt ${env.USAGE_PAUSE_PERCENT}% hạn mức gói miễn phí Cloudflare của ngày ${day} (giờ UTC).`
+      : `Bản Solaris tại ${env.FRONTEND_URL} vừa vượt ngưỡng cảnh báo của gói miễn phí Cloudflare trong ngày ${day} (giờ UTC).`,
+    ...(paused
+      ? [
+          "Người dùng và khách đang thấy thông báo hết lưu lượng. Quản trị viên vẫn đăng nhập và xem trang hạ tầng được.",
+        ]
+      : []),
     "",
     "Vừa vượt ngưỡng:",
     ...crossed.map(
@@ -333,8 +673,8 @@ function buildAlertMail(day, totals, claimedRows) {
         `- ${metric.label}: ${number(metric.used)} / ${number(metric.limit)} (${percentText(metric.percent)})`
     ),
     "",
-    `Hạn mức đặt lại lúc 00:00 UTC, tức 07:00 giờ Việt Nam (${nextReset()}).`,
-    "Gói miễn phí không tính tiền. Nếu một chỉ số chạm 100%, hệ thống sẽ báo lỗi (mọi request, hoặc mọi thao tác với database) cho tới lúc đặt lại.",
+    `Hạn mức đặt lại lúc 00:00 UTC, tức 07:00 giờ Việt Nam (${nextReset()}); hệ thống tự hoạt động lại lúc đó.`,
+    `Gói miễn phí không tính tiền. Hệ thống tự tạm ngừng khi một chỉ số đạt ${env.USAGE_PAUSE_PERCENT}% để không rơi vào trạng thái mọi thao tác đều lỗi.`,
     `Xem mức dùng bất cứ lúc nào: đăng nhập bằng tài khoản quản trị tại ${env.FRONTEND_URL}.`,
   ].join("\n");
 

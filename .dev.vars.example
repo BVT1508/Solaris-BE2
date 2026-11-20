@@ -39,5 +39,7 @@ ALERT_EMAIL_TO=
 USAGE_LIMIT_REQUESTS=
 USAGE_LIMIT_ROWS_READ=
 USAGE_LIMIT_ROWS_WRITTEN=
+# Một chỉ số đạt chừng này phần trăm của trần thì API tạm ngừng tới 00:00 UTC. Bỏ trống: 97.
+USAGE_PAUSE_PERCENT=
 # Số đếm nằm trong bộ nhớ bao nhiêu giây rồi mới ghi xuống D1 (0 tới 25). Bỏ trống: 15.
 USAGE_FLUSH_SECONDS=

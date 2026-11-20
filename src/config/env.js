@@ -68,6 +68,8 @@ const envSchema = z
     USAGE_LIMIT_REQUESTS: numberOr(100000, z.number().int().positive()),
     USAGE_LIMIT_ROWS_READ: numberOr(5000000, z.number().int().positive()),
     USAGE_LIMIT_ROWS_WRITTEN: numberOr(100000, z.number().int().positive()),
+    // Một chỉ số đạt chừng này phần trăm của trần thì hệ thống tạm ngừng tới 00:00 UTC (services/usageService.js).
+    USAGE_PAUSE_PERCENT: numberOr(97, z.number().min(1).max(100)),
     // Số đếm nằm trong bộ nhớ bao nhiêu giây rồi mới ghi xuống D1 (một lần ghi cho mọi request trong khoảng đó).
     // Tối đa 25: việc ghi chạy sau response, Cloudflare chỉ giữ request sống thêm 30 giây.
     USAGE_FLUSH_SECONDS: numberOr(15, z.number().min(0).max(25)),
@@ -144,6 +146,7 @@ const env = loadEnv({
   USAGE_LIMIT_REQUESTS: bindings.USAGE_LIMIT_REQUESTS,
   USAGE_LIMIT_ROWS_READ: bindings.USAGE_LIMIT_ROWS_READ,
   USAGE_LIMIT_ROWS_WRITTEN: bindings.USAGE_LIMIT_ROWS_WRITTEN,
+  USAGE_PAUSE_PERCENT: bindings.USAGE_PAUSE_PERCENT,
   USAGE_FLUSH_SECONDS: bindings.USAGE_FLUSH_SECONDS,
   RESEND_API_KEY: bindings.RESEND_API_KEY,
   ALERT_EMAIL_FROM: bindings.ALERT_EMAIL_FROM,

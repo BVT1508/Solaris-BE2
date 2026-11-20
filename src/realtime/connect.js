@@ -1,6 +1,9 @@
 import { getCookie } from "hono/cookie";
 import env, { bindings } from "../config/env.js";
 import { first, sql } from "../db/d1.js";
+import { markMember } from "../db/usageCounter.js";
+import { PAUSE_CODE, PAUSE_MESSAGE } from "../middleware/quotaMiddleware.js";
+import { isPaused } from "../services/usageService.js";
 import { isTrustedOrigin } from "../middleware/securityMiddleware.js";
 import { clientIp } from "../middleware/rateLimitMiddleware.js";
 import { hashToken, resolveSession } from "../services/authService.js";
@@ -21,11 +24,13 @@ export const SESSION_COOKIE = "solaris_sid";
 const LINK_TOKEN = /^[A-Za-z0-9_-]{32}$/;
 
 /** Nâng cấp rồi đóng ngay với lời báo, không qua Durable Object. */
-const refuse = (status, message) => {
+const refuse = (status, message, code) => {
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair);
   server.accept();
-  server.send(JSON.stringify({ type: "error", status, message }));
+  server.send(
+    JSON.stringify({ type: "error", status, message, ...(code && { code }) })
+  );
   server.close(4000 + status, "refused");
   return new Response(null, { status: 101, webSocket: client });
 };
@@ -60,6 +65,7 @@ async function identify(c) {
   if (!resolved) {
     return { error: [401, "Bạn chưa đăng nhập hoặc phiên đã hết hạn."] };
   }
+  markMember(c.req.raw);
   return {
     identity: {
       kind: "member",
@@ -86,6 +92,9 @@ export async function connectRealtime(c) {
       403
     );
   }
+  // Hệ thống đang tạm ngừng vì hết hạn mức: từ chối trước khi đọc phiên hay link (mã đóng 4503, kèm code "quota_paused").
+  if (isPaused()) return refuse(503, PAUSE_MESSAGE, PAUSE_CODE);
+
   // Mỗi lần mở kết nối tốn một lần đọc phiên hoặc link: một IP không mở quá 120 kết nối mỗi phút.
   if (bindings.SOCKET_LIMITER && !env.IS_DEV) {
     const { success } = await bindings.SOCKET_LIMITER.limit({

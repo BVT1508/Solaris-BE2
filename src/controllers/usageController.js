@@ -8,3 +8,12 @@ export const getUsage = async (c) => {
     data: { usage },
   });
 };
+
+export const getInfrastructure = async (c) => {
+  const infrastructure = await usageService.getInfrastructure();
+
+  return c.json({
+    status: "success",
+    data: { infrastructure },
+  });
+};
