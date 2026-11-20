@@ -132,7 +132,9 @@ Khi một chỉ số đạt **97%** của trần (biến `USAGE_PAUSE_PERCENT`),
 
 Dừng ở 97% chứ không chờ 100% vì hai lý do: chừa phần cho quản trị viên vào xem, và để database không rơi vào trạng thái mọi truy vấn đều lỗi. Vì số đếm là ước lượng, còn một lớp nữa: khi chính D1 báo tài khoản đã chạm trần ngày, hệ thống cũng chuyển sang tạm ngừng và trả cùng thông báo thay cho lỗi 500.
 
-Giới hạn cần biết: mỗi tiến trình của Worker chỉ biết số đếm sau lần ghi đầu tiên của nó, nên ngay sau lúc tạm ngừng vẫn có vài request lọt qua; và hạn mức **request** thì không tự cứu được hoàn toàn, vì request bị chặn vẫn là một request vào Worker.
+Cloudflare chạy nhiều tiến trình của Worker song song, mỗi tiến trình chỉ thấy phần request của mình. Để tất cả cùng tạm ngừng, mỗi tiến trình đọc lại mức dùng từ database khi nó chưa biết gì về hôm nay, và mỗi 15 giây khi đang có lưu lượng (biến `USAGE_SNAPSHOT_SECONDS`). Vì vậy **từ lúc vượt ngưỡng tới lúc mọi tiến trình cùng chặn mất nhiều nhất khoảng 30 giây**: tối đa 15 giây để số đếm được ghi xuống, cộng tối đa 15 giây để các tiến trình khác đọc lại. Trong khoảng đó vẫn có request lọt qua. Cái giá: mỗi tiến trình đang có lưu lượng tốn một dòng đọc mỗi 15 giây; xấu nhất là một dòng đọc cho mỗi request, tức dưới 100.000 dòng mỗi ngày (2% hạn mức đọc).
+
+Giới hạn cần biết: hạn mức **request** thì không tự cứu được hoàn toàn, vì request bị chặn vẫn là một request vào Worker.
 
 ### Chống bot làm hao request
 
@@ -146,7 +148,7 @@ Nói thẳng: Worker trên địa chỉ `workers.dev` **không có tường lử
 | Giới hạn tần suất theo IP                        | 600 request API mỗi phút; 10 lần đăng nhập; 120 lần mở link chia sẻ; 60 lần ghi của khách. **Giảm tải cho database, không giảm số request bị tính**: request bị chặn (429) vẫn là một request vào Worker. |
 | Tạm ngừng ở 97%                                  | Chặn mọi thứ trước khi database hết hạn mức.                                                                                                                                                              |
 
-Trang hạ tầng tách lưu lượng thành ba loại (thành viên, khách, không danh tính) và đếm số 404, 429, 5xx theo giờ: cột "không danh tính" tăng vọt là dấu hiệu bot đang gõ vào `/api`.
+Trang hạ tầng tách lưu lượng thành ba loại (thành viên, khách, không danh tính) và đếm theo giờ số 404, 429, 5xx, cùng số request bị từ chối lúc tạm ngừng (đếm riêng, không tính là lỗi): cột "không danh tính" tăng vọt là dấu hiệu bot đang gõ vào `/api`.
 
 Đánh đổi của lớp đầu tiên: một file không tồn tại (ví dụ gói JS cũ sau lần deploy) nhận `index.html` thay cho 404.
 
@@ -163,8 +165,10 @@ Email gửi qua [Resend](https://resend.com) (gói miễn phí: 100 email mỗi 
 
 Nếu tài khoản Resend đăng ký bằng một email khác `OWNER_EMAIL`, đặt thêm khóa `ALERT_EMAIL_TO` bằng đúng email của tài khoản Resend (`npx wrangler secret put ALERT_EMAIL_TO -c wrangler.deploy.jsonc`).
 
+Bản không phải bản team dùng (ví dụ bản thử `app-thu`) nên đặt thêm biến `ENVIRONMENT_LABEL`, ví dụ `bản thử`: email của bản đó có tiêu đề dạng "[Solaris, bản thử] ..." và dòng đầu ghi "Đây là thư từ bản thử, không phải bản team đang dùng.", để không lẫn với thư của bản chính. Bản chính để trống.
+
 Chưa đặt `RESEND_API_KEY` thì hệ thống vẫn đếm, vẫn ghi nhận ngưỡng đã vượt, vẫn tạm ngừng đúng lúc; chỉ không có email. Đặt khóa sau thì ngưỡng đã vượt trong ngày mà chưa báo sẽ được gửi ở lượt kiểm kế tiếp. Sau này có tên miền riêng đã xác minh ở Resend thì đặt `ALERT_EMAIL_FROM` để đổi người gửi.
 
 ### Cấu hình
 
-Trần dùng để tính phần trăm đặt ở `vars` của `wrangler.jsonc` (`USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN`, `USAGE_PAUSE_PERCENT`): đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Bảng đếm tạo bằng migration `0002_usage.sql` và `0003_usage_hourly.sql`; chưa áp thì hệ thống chạy bình thường nhưng không đếm (và vì vậy không tự tạm ngừng).
+Trần dùng để tính phần trăm đặt ở `vars` của `wrangler.jsonc` (`USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN`, `USAGE_PAUSE_PERCENT`; thêm `USAGE_SNAPSHOT_SECONDS` nếu muốn đổi nhịp đọc lại): đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Bảng đếm tạo bằng migration `0002_usage.sql`, `0003_usage_hourly.sql` và `0004_usage_paused.sql`; chưa áp thì hệ thống chạy bình thường nhưng không đếm (và vì vậy không tự tạm ngừng).

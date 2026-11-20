@@ -63,6 +63,21 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 
 **Tin của phiên điều phối chưa làm xong:** không còn. Việc mới nhất là đợt 21/11 (đếm mức dùng và cảnh báo), đã xong phần code và thử trên máy dev, chờ phiên điều phối áp migration `0002` và deploy; xem mục "Đợt 21/11". Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
 
+## Đợt 21/11 (sửa sau khi thử thật): tạm ngừng lọt giữa các tiến trình
+
+Phiên điều phối thử `a5be6d2` trên bản thử: trang hạ tầng và lớp chống bot đạt 13/13 (40 lượt dò kiểu bot không gọi Worker, `robots.txt` đúng, dòng `warmup` báo 13/13). **Lỗi**: tạm ngừng chỉ có hiệu lực ở tiến trình đã tự biết số; 20 lần `GET /orders` tuần tự đều 200, 40 lần cùng lúc 23 lần 200, WebSocket vẫn nối được.
+
+- [x] **Sửa**: bản chụp mức dùng có hạn dùng 15 giây (`USAGE_SNAPSHOT_SECONDS`). `refreshUsageIfStale` trong `usageService.js`; `pauseGate` (`quotaMiddleware.js`) và bắt tay WebSocket (`realtime/connect.js`) chờ đọc lại dòng của ngày khi isolate chưa biết gì về hôm nay hoặc bản chụp quá hạn. Độ trễ tối đa tới lúc mọi tiến trình cùng chặn: khoảng 30 giây. Chi phí: xấu nhất một dòng đọc mỗi request (dưới 2% hạn mức đọc). Không dùng chung promise giữa các request, không dùng Cache API.
+- [x] Thử trên máy dev: `x_kiem_tam_ngung_tien_trinh.mjs` 5/5 (pha `ttl`) và 9/9 (pha `moi`); kết quả các kịch bản cũ và bộ Postman ghi ở dòng "Kết quả chạy lại" bên dưới.
+- [x] **Làm nóng, việc còn nợ**: đã xem. Request mẫu đi đủ đường tạo góp ý của khách; phần còn lạnh là lần dùng đầu của các binding thật (lớp bọc D1, ba bộ giới hạn tần suất của đường khách, Durable Object, body, `Response`), không chạy được lúc nạp module. Số đo trên workerd cục bộ (`x-do-lanh/do-workerd.sh`) và kết quả của phiên điều phối đã ghi vào `docs/kien-truc.md` mục 10. Mục tiêu request thứ 1 dưới 6 ms **chưa đạt**; muốn đi tiếp phải đo từng binding trên Cloudflare thật bằng đường chẩn đoán.
+
+- [x] **Nhãn môi trường trong email** (phiên điều phối giao thêm): biến `ENVIRONMENT_LABEL` (ví dụ `bản thử`), có giá trị thì tiêu đề thành "[Solaris, bản thử] ..." và dòng đầu thư ghi rõ không phải bản team đang dùng. Bản chính để trống.
+- [x] **Đếm riêng request bị từ chối lúc tạm ngừng** (phiên điều phối giao thêm): migration `0004_usage_paused.sql` (cột `paused` ở `usage_hourly` và `usage_daily`); 503 `quota_paused` và kết nối trực tiếp mã 4503 không còn tính vào `status5xx`. Tên trường cho frontend: `hourly[].paused` và `daily[].paused` trong `GET /api/v1/infrastructure`.
+
+Kết quả chạy lại sau mọi thay đổi của đợt này (máy dev, mỗi lượt một thư mục D1 mới): `x_kiem_tam_ngung_tien_trinh.mjs` 5/5 và 9/9; `x_kiem_tam_ngung.mjs` 35/35 (thêm phép P11 cho `paused`; với `ENVIRONMENT_LABEL` thì tiêu đề thư là "[Solaris, bản thử] ..."); cả bộ Postman 406 request 1377/1377 (`ket-qua/2026-11-21_025948_x-ban-chup-3`), server không nạp lại; `x_kiem_gop_y_team` 68/68; lint, prettier, `warmup:check` sạch. Một lượt Postman giữa chừng có 10 lỗi ở nhóm 07 vì server nạp lại 2 lần (phiên khác chép lại `frontend-dist` đúng lúc chấm): không tính, đã chạy lại. **Chưa thử trên Cloudflare thật.**
+
+**Phiên điều phối cần làm khi deploy**: áp `0004_usage_paused.sql` lên cả hai D1 TRƯỚC khi deploy code (thiếu cột thì việc ghi số đếm tự nghỉ 10 phút một lần và `GET /infrastructure` lỗi); đặt `ENVIRONMENT_LABEL` cho Worker `app-thu`.
+
 ## Đợt 21/11 (tiếp nữa): tạm ngừng khi hết hạn mức, chống bot, trang hạ tầng
 
 Yêu cầu của chủ dự án qua phiên điều phối (ưu tiên cao). Chi tiết thiết kế: `docs/kien-truc.md` mục 10, phần "Tạm ngừng, chống bot và trang hạ tầng"; hợp đồng cho frontend: `docs/api-bo-sung.md`; lời cho chủ dự án: `README.md` mục "Hạn mức gói miễn phí và cảnh báo".

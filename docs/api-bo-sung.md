@@ -26,7 +26,7 @@ Cache-Control: no-store
 - Giao diện (file tĩnh) vẫn tải được lúc tạm ngừng: nó không đi qua Worker.
 - Kết nối trực tiếp (`GET /api/v1/realtime`) bị từ chối với cùng `code`: xem `docs/hop-dong-realtime.md` (mã đóng 4503).
 - Sang ngày mới theo UTC (07:00 giờ Việt Nam) hệ thống tự hoạt động lại.
-- Một tiến trình mới của Worker chưa biết số đếm nên chưa chặn ngay; nó bắt đầu chặn sau lần ghi số đếm đầu tiên (khoảng 15 giây) hoặc khi D1 báo lỗi chạm trần. Vì vậy ngay sau lúc tạm ngừng vẫn có thể có vài request lọt qua.
+- Cloudflare chạy nhiều tiến trình của Worker song song. Từ lúc mức dùng vượt ngưỡng tới lúc MỌI tiến trình cùng chặn mất nhiều nhất khoảng 30 giây; trong khoảng đó cùng một lời gọi có thể lúc 200 lúc 503. Frontend nên coi lần 503 `quota_paused` đầu tiên là tín hiệu chuyển sang màn tạm ngừng và giữ màn đó, không quay lại vì một lời gọi khác vừa 200.
 
 ## GET /api/v1/usage
 
@@ -131,7 +131,8 @@ Trả 200 (các mảng rút gọn):
           "anonymous": 15,
           "status404": 6,
           "status429": 0,
-          "status5xx": 0
+          "status5xx": 0,
+          "paused": 0
         }
       ],
       "daily": [
@@ -143,6 +144,7 @@ Trả 200 (các mảng rút gọn):
           "member": 900,
           "guest": 250,
           "anonymous": 84,
+          "paused": 0,
           "peakPercent": 3.3
         }
       ],
@@ -168,19 +170,20 @@ Trả 200 (các mảng rút gọn):
 }
 ```
 
-| Trường                            | Ý nghĩa                                                                                                                                                                                               |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plan`                            | Luôn `"Workers Free"`.                                                                                                                                                                                |
-| `worker`                          | `name` là nhãn đầu của tên miền (ví dụ `app`, `app-thu`); `url` là địa chỉ của bản đang chạy.                                                                                                         |
-| `day`, `resetAt`, `estimated`     | Như `GET /usage`.                                                                                                                                                                                     |
-| `level`, `metrics`                | Như `GET /usage` (ba chỉ số của hôm nay).                                                                                                                                                             |
-| `pausePercent`                    | Ngưỡng tạm ngừng đang cấu hình (mặc định 97).                                                                                                                                                         |
-| `hourly`                          | Đúng **48** phần tử, mỗi giờ một phần tử, cũ trước mới sau, phần tử cuối là giờ hiện tại. Giờ không có lưu lượng vẫn có mặt với số 0. `hour` là đầu giờ theo UTC, chuỗi ISO.                          |
-| `hourly[].member/guest/anonymous` | Request chia theo người gọi: `member` có phiên hợp lệ; `guest` là đường của link chia sẻ với token đúng dạng; `anonymous` là còn lại (chưa đăng nhập, đường lạ, dò quét: phần lớn lưu lượng của bot). |
-| `hourly[].status404/429/5xx`      | Số request nhận 404, 429, và 5xx (gồm cả 503 `quota_paused` lúc tạm ngừng).                                                                                                                           |
-| `daily`                           | Đúng **30** phần tử, mỗi ngày (UTC) một phần tử, cũ trước mới sau, phần tử cuối là hôm nay. `peakPercent` là mức cao nhất trong ba chỉ số của ngày đó so với trần hiện tại (một chữ số thập phân).    |
-| `alerts`                          | Tối đa 20 ngưỡng đã vượt, mới nhất trước. `threshold` là 70, 90 hoặc ngưỡng tạm ngừng. `emailedAt` là `null` khi chưa gửi được email (chưa có khóa, hoặc gửi lỗi và đang chờ thử lại).                |
-| `protection`                      | Các lớp bảo vệ hạn mức và trạng thái bật hay chưa: `key` cố định (bảng dưới), `label` và `detail` là chữ tiếng Việt để hiển thị.                                                                      |
+| Trường                              | Ý nghĩa                                                                                                                                                                                               |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`                              | Luôn `"Workers Free"`.                                                                                                                                                                                |
+| `worker`                            | `name` là nhãn đầu của tên miền (ví dụ `app`, `app-thu`); `url` là địa chỉ của bản đang chạy.                                                                                                         |
+| `day`, `resetAt`, `estimated`       | Như `GET /usage`.                                                                                                                                                                                     |
+| `level`, `metrics`                  | Như `GET /usage` (ba chỉ số của hôm nay).                                                                                                                                                             |
+| `pausePercent`                      | Ngưỡng tạm ngừng đang cấu hình (mặc định 97).                                                                                                                                                         |
+| `hourly`                            | Đúng **48** phần tử, mỗi giờ một phần tử, cũ trước mới sau, phần tử cuối là giờ hiện tại. Giờ không có lưu lượng vẫn có mặt với số 0. `hour` là đầu giờ theo UTC, chuỗi ISO.                          |
+| `hourly[].member/guest/anonymous`   | Request chia theo người gọi: `member` có phiên hợp lệ; `guest` là đường của link chia sẻ với token đúng dạng; `anonymous` là còn lại (chưa đăng nhập, đường lạ, dò quét: phần lớn lưu lượng của bot). |
+| `hourly[].status404/429/5xx`        | Số request nhận 404, 429, và 5xx. **Không gồm** 503 `quota_paused`: lần từ chối vì tạm ngừng đếm riêng ở `paused`, vì đó không phải lỗi máy chủ.                                                      |
+| `hourly[].paused`, `daily[].paused` | Số request bị từ chối vì hệ thống đang tạm ngừng (503 `quota_paused`, và kết nối trực tiếp bị đóng mã 4503). Thêm ngày 21/11/2026; dữ liệu trước đó là 0.                                             |
+| `daily`                             | Đúng **30** phần tử, mỗi ngày (UTC) một phần tử, cũ trước mới sau, phần tử cuối là hôm nay. `peakPercent` là mức cao nhất trong ba chỉ số của ngày đó so với trần hiện tại (một chữ số thập phân).    |
+| `alerts`                            | Tối đa 20 ngưỡng đã vượt, mới nhất trước. `threshold` là 70, 90 hoặc ngưỡng tạm ngừng. `emailedAt` là `null` khi chưa gửi được email (chưa có khóa, hoặc gửi lỗi và đang chờ thử lại).                |
+| `protection`                        | Các lớp bảo vệ hạn mức và trạng thái bật hay chưa: `key` cố định (bảng dưới), `label` và `detail` là chữ tiếng Việt để hiển thị.                                                                      |
 
 `protection[].key` hiện có: `static_assets`, `robots`, `rate_limits`, `anonymous_no_database`, `pause`, `email_alerts`, `warmup`, `waf`. Mục `waf` luôn `active: false` (cần tên miền riêng); frontend nên hiển thị theo `active` chứ không giả định danh sách cố định.
 
