@@ -1,4 +1,4 @@
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../config/runtime.js";
 import logger from "./logger.js";
 
 /**

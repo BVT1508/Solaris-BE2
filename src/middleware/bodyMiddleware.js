@@ -1,3 +1,4 @@
+import { dry } from "../config/runtime.js";
 import AppError from "../utils/appError.js";
 
 /**
@@ -59,7 +60,11 @@ export const parseBody = async (c, next) => {
   const limit = PAGES_ROUTE.test(c.req.path) ? PAGES_LIMIT : DEFAULT_LIMIT;
   // Content-Length khai quá trần thì từ chối luôn, không đọc.
   if (Number(c.req.header("content-length") || 0) > limit) throw tooLarge();
-  const bytes = await c.req.raw.arrayBuffer();
+  // Lúc làm nóng không được đọc luồng body (Worker cấm lúc nạp module): body mẫu nằm sẵn trong ngữ cảnh chạy khô.
+  const dryContext = dry();
+  const bytes = dryContext
+    ? dryContext.body || new Uint8Array(0)
+    : await c.req.raw.arrayBuffer();
   if (bytes.byteLength > limit) throw tooLarge();
 
   if (bytes.byteLength > 0) {

@@ -1,4 +1,5 @@
 import env from "../config/env.js";
+import { dry } from "../config/runtime.js";
 
 /**
  * Ghi log dạng JSON một dòng ra console: Cloudflare (Workers Logs) và `wrangler dev` đều đọc được.
@@ -27,7 +28,8 @@ const clean = (fields) => {
 };
 
 const write = (level, method) => (fields, message) => {
-  if (LEVELS[level] < threshold) return;
+  // Request mẫu lúc làm nóng không ghi log.
+  if (LEVELS[level] < threshold || dry()) return;
   const entry =
     typeof fields === "string"
       ? { level, msg: fields }

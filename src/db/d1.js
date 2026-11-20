@@ -1,4 +1,4 @@
-import { env as bindings } from "cloudflare:workers";
+import { binding, dry } from "../config/runtime.js";
 import AppError, { STALE } from "../utils/appError.js";
 import { countRows } from "./usageCounter.js";
 
@@ -21,7 +21,7 @@ import { countRows } from "./usageCounter.js";
  */
 
 /** Database D1 của Worker. */
-export const db = () => bindings.DB;
+export const db = () => binding("DB");
 
 class Sql {
   constructor(text, params) {
@@ -102,7 +102,8 @@ const prepare = (query) => {
 
 /** Ghi nhận số dòng đọc, ghi của một kết quả D1 rồi trả lại chính kết quả đó. */
 const counted = (result) => {
-  countRows(result.meta);
+  // Lúc làm nóng (chạy khô với database giả) thì không đếm.
+  if (!dry()) countRows(result.meta);
   return result;
 };
 

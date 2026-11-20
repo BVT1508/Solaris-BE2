@@ -1,4 +1,5 @@
-import env, { bindings } from "../config/env.js";
+import env from "../config/env.js";
+import { binding } from "../config/runtime.js";
 import { first, sql } from "../db/d1.js";
 import AppError from "../utils/appError.js";
 
@@ -29,7 +30,7 @@ const byIp =
   (name, bindingName, limit, { devOnlyRelaxed = true } = {}) =>
   async (c, next) => {
     c.header("RateLimit-Policy", `"${name}";q=${limit};w=60`);
-    const limiter = bindings[bindingName];
+    const limiter = binding(bindingName);
     if (limiter && !(devOnlyRelaxed && env.IS_DEV)) {
       const { success } = await limiter.limit({ key: clientIp(c) });
       if (!success) return tooFast(c, 60);

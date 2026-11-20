@@ -1,4 +1,4 @@
-import { bindings } from "../config/env.js";
+import { binding } from "../config/runtime.js";
 import { runAfterResponse } from "./background.js";
 
 /**
@@ -15,7 +15,10 @@ import { runAfterResponse } from "./background.js";
  */
 const SOCKET_ID = /^[A-Za-z0-9_-]{10,40}$/;
 
-const hub = () => bindings.REALTIME.get(bindings.REALTIME.idFromName("hub"));
+const hub = () => {
+  const namespace = binding("REALTIME");
+  return namespace.get(namespace.idFromName("hub"));
+};
 
 /**
  * Mã kết nối trực tiếp của chính tab đang gọi API (header X-Socket-Id). Có mã này thì sự kiện do request đó gây ra

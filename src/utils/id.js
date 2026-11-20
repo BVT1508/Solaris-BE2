@@ -8,6 +8,8 @@
  * Trong Worker, Date.now() đứng yên giữa hai lần chờ I/O, nên nhiều id sinh liền nhau sẽ trùng mốc thời gian:
  * mốc luôn được đẩy lên ít nhất 1 so với id trước đó trong cùng isolate để thứ tự sinh được giữ nguyên.
  */
+import { randomBytes } from "../config/runtime.js";
+
 let lastStamp = 0;
 
 const HEX = /^[0-9a-f]{24}$/;
@@ -19,7 +21,7 @@ export function newId() {
   if (stamp <= lastStamp) stamp = lastStamp + 1;
   lastStamp = stamp;
 
-  const random = crypto.getRandomValues(new Uint8Array(6));
+  const random = randomBytes(6);
   let tail = "";
   for (const byte of random) tail += byte.toString(16).padStart(2, "0");
   return stamp.toString(16).padStart(12, "0") + tail;
