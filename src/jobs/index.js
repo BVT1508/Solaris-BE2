@@ -1,11 +1,13 @@
 import env from "../config/env.js";
 import { run, sql } from "../db/d1.js";
 import { ensureOwner } from "../services/authService.js";
+import { flushUsage } from "../services/usageService.js";
 import logger from "../utils/logger.js";
 import { toSearchText } from "../utils/searchText.js";
 import { now } from "../utils/time.js";
 import * as maintenanceJobs from "./maintenanceJobs.js";
 import * as storageJobs from "./storageJobs.js";
+import * as usageJobs from "./usageJobs.js";
 
 /**
  * Việc định kỳ (Cron Triggers, khai ở "triggers" trong wrangler.jsonc), thay cho setInterval của backend cũ.
@@ -44,6 +46,8 @@ const JOBS = {
     // Backend cũ khôi phục chủ hệ thống mỗi lần server khởi động; Worker không có lúc khởi động nên làm ở đây và ở các đường đăng nhập.
     ["bảo đảm chủ hệ thống", async () => (await ensureOwner(), "xong")],
     ...storageJobs.hourlyJobs,
+    // Đứng cuối nhóm: số dòng các việc trên vừa đọc, ghi cũng vào tổng trước khi so với ngưỡng.
+    ...usageJobs.hourlyJobs,
   ],
   [SIX_HOURLY]: [
     ...storageJobs.sixHourlyJobs,
@@ -88,4 +92,6 @@ export async function runScheduled(cron) {
       logger.error({ err, job: label }, "Việc định kỳ bị lỗi");
     }
   }
+  // Số dòng D1 các việc trên đã đọc, ghi: ghi xuống bảng mức dùng ngay, vì lượt chạy định kỳ không có request nào hẹn ghi hộ.
+  await flushUsage();
 }

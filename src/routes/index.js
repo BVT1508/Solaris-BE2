@@ -19,6 +19,7 @@ import roundRoutes from "./roundRoutes.js";
 import shareLinkRoutes, {
   deliverableShareLinkRoutes,
 } from "./shareLinkRoutes.js";
+import usageRoutes from "./usageRoutes.js";
 
 /**
  * Gom route của /api/v1. File này đã gắn sẵn mọi file route của các gói việc (docs/kien-truc.md mục 12):
@@ -40,6 +41,7 @@ for (const prefix of [
   "/deliverables",
   "/share-links",
   "/feedback",
+  "/usage",
 ]) {
   route.use(`${prefix}/*`, authCtrl.protect);
 }
@@ -59,6 +61,9 @@ route.route("/deliverables", deliverableFeedbackRoutes);
 
 route.route("/share-links", shareLinkRoutes);
 route.route("/feedback", feedbackRoutes);
+
+// Mức dùng gói miễn phí của Cloudflare, cho quản trị viên. Route mới, backend cũ không có.
+route.route("/usage", usageRoutes);
 
 // Khách mở link chia sẻ, không đăng nhập. Giới hạn tốc độ riêng vì ai có link (hoặc đang dò token) cũng gọi được.
 route.use("/r/*", publicLimiter);
