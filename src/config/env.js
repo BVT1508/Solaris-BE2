@@ -79,6 +79,17 @@ const envSchema = z
       .trim()
       .optional()
       .transform((value) => value || "Solaris <onboarding@resend.dev>"),
+    // Người nhận email cảnh báo. Để trống: OWNER_EMAIL. Cần khi tài khoản Resend đăng ký bằng một email khác email chủ hệ thống
+    // (chưa có tên miền thì Resend chỉ gửi được tới email của chính tài khoản Resend).
+    ALERT_EMAIL_TO: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .optional()
+      .transform((value) => value || undefined)
+      .pipe(
+        z.email({ error: "ALERT_EMAIL_TO không phải email hợp lệ." }).optional()
+      ),
   })
   .refine(
     (env) =>
@@ -136,6 +147,7 @@ const env = loadEnv({
   USAGE_FLUSH_SECONDS: bindings.USAGE_FLUSH_SECONDS,
   RESEND_API_KEY: bindings.RESEND_API_KEY,
   ALERT_EMAIL_FROM: bindings.ALERT_EMAIL_FROM,
+  ALERT_EMAIL_TO: bindings.ALERT_EMAIL_TO,
 });
 
 export default env;

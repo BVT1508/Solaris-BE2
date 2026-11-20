@@ -33,6 +33,8 @@ LOG_LEVEL=info
 RESEND_API_KEY=
 # Người gửi. Bỏ trống: "Solaris <onboarding@resend.dev>", chỉ gửi được tới email của chính tài khoản Resend.
 ALERT_EMAIL_FROM=
+# Người nhận email cảnh báo. Bỏ trống: OWNER_EMAIL. Đặt khi tài khoản Resend đăng ký bằng email khác email chủ hệ thống.
+ALERT_EMAIL_TO=
 # Trần mỗi ngày để tính phần trăm. Bỏ trống: 100000, 5000000, 100000. Đặt nhỏ khi muốn thử cảnh báo trên máy dev.
 USAGE_LIMIT_REQUESTS=
 USAGE_LIMIT_ROWS_READ=

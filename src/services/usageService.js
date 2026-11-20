@@ -339,7 +339,7 @@ function buildAlertMail(day, totals, claimedRows) {
   ].join("\n");
 
   return {
-    to: env.OWNER_EMAIL,
+    to: env.ALERT_EMAIL_TO || env.OWNER_EMAIL,
     subject,
     text,
     idempotencyKey: `solaris-usage:${host}:${day}:${claimedRows

@@ -125,6 +125,8 @@ Email gửi qua [Resend](https://resend.com) (gói miễn phí: 100 email mỗi 
 1. Đăng ký Resend bằng **đúng địa chỉ `OWNER_EMAIL`**. Chưa có tên miền thì Resend chỉ cho gửi từ `onboarding@resend.dev` tới email của chính tài khoản Resend, nên hai địa chỉ phải trùng nhau.
 2. Tạo một API key ở Resend, rồi đặt làm khóa bí mật: `npx wrangler secret put RESEND_API_KEY -c wrangler.deploy.jsonc`.
 
+Nếu tài khoản Resend đăng ký bằng một email khác `OWNER_EMAIL`, đặt thêm khóa `ALERT_EMAIL_TO` bằng đúng email của tài khoản Resend (`npx wrangler secret put ALERT_EMAIL_TO --name app`): email cảnh báo sẽ gửi tới địa chỉ đó thay cho `OWNER_EMAIL`.
+
 Chưa đặt `RESEND_API_KEY` thì hệ thống vẫn đếm, vẫn ghi nhận ngưỡng đã vượt và `GET /api/v1/usage` vẫn dùng được; chỉ không có email. Đặt khóa sau thì ngưỡng đã vượt trong ngày mà chưa báo sẽ được gửi ở lượt kiểm kế tiếp. Sau này có tên miền riêng đã xác minh ở Resend thì đặt `ALERT_EMAIL_FROM` để đổi người gửi.
 
 Trần dùng để tính phần trăm đặt ở `vars` của `wrangler.jsonc` (`USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN`): đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Bảng đếm tạo bằng migration `0002_usage.sql`; chưa áp migration này thì hệ thống chạy bình thường nhưng không đếm.
