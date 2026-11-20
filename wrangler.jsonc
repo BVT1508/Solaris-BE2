@@ -79,7 +79,7 @@
   ],
 
   // Giá trị không bí mật, đi theo bản deploy. Máy dev ghi đè bằng .dev.vars (xem .dev.vars.example).
-  // Khóa bí mật (OWNER_EMAIL không bí mật nhưng riêng từng nơi, GOOGLE_CLIENT_SECRET, CLOUDINARY_URL) đặt bằng `wrangler secret put`.
+  // Khóa bí mật (OWNER_EMAIL không bí mật nhưng riêng từng nơi, GOOGLE_CLIENT_SECRET, CLOUDINARY_URL, RESEND_API_KEY) đặt bằng `wrangler secret put`.
   "vars": {
     // "production" là mặc định an toàn: đăng nhập dev chỉ bật khi .dev.vars đặt ENVIRONMENT=development.
     "ENVIRONMENT": "production",
@@ -88,6 +88,11 @@
     "CLIENT_ORIGINS": "https://app.solaris-fbs.workers.dev",
     "SESSION_HOURS": "12",
     "LOG_LEVEL": "info",
+    // Trần mỗi ngày (UTC) của gói miễn phí, dùng để tính phần trăm ở GET /api/v1/usage và để cảnh báo ở 70% và 90%.
+    // Đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Email cảnh báo cần thêm khóa bí mật RESEND_API_KEY (xem README.md).
+    "USAGE_LIMIT_REQUESTS": "100000",
+    "USAGE_LIMIT_ROWS_READ": "5000000",
+    "USAGE_LIMIT_ROWS_WRITTEN": "100000",
   },
 
   "observability": { "enabled": true },

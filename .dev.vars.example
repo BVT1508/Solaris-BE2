@@ -27,3 +27,15 @@ API_PUBLIC_URL=
 
 # debug, info, warn, error, silent
 LOG_LEVEL=info
+
+# Cảnh báo hạn mức gói miễn phí (xem README.md, mục "Hạn mức gói miễn phí và cảnh báo").
+# Khóa API của Resend (resend.com) để gửi email cảnh báo tới OWNER_EMAIL. Bỏ trống: không gửi email, chỉ ghi nhận ngưỡng đã vượt.
+RESEND_API_KEY=
+# Người gửi. Bỏ trống: "Solaris <onboarding@resend.dev>", chỉ gửi được tới email của chính tài khoản Resend.
+ALERT_EMAIL_FROM=
+# Trần mỗi ngày để tính phần trăm. Bỏ trống: 100000, 5000000, 100000. Đặt nhỏ khi muốn thử cảnh báo trên máy dev.
+USAGE_LIMIT_REQUESTS=
+USAGE_LIMIT_ROWS_READ=
+USAGE_LIMIT_ROWS_WRITTEN=
+# Số đếm nằm trong bộ nhớ bao nhiêu giây rồi mới ghi xuống D1 (0 tới 25). Bỏ trống: 15.
+USAGE_FLUSH_SECONDS=

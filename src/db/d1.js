@@ -1,5 +1,6 @@
 import { env as bindings } from "cloudflare:workers";
 import AppError, { STALE } from "../utils/appError.js";
+import { countRows } from "./usageCounter.js";
 
 /**
  * Lớp truy vấn D1 mỏng, không ORM. Ba thứ cần nhớ:
@@ -14,6 +15,9 @@ import AppError, { STALE } from "../utils/appError.js";
  *    vừa đọc vẫn còn đúng. Một guard sai là cả lô bị hoàn tác. Xem docs/kien-truc.md mục 3.
  *
  * 3. Danh sách giá trị cho IN: dùng sql.list(mảng), không tự nối dấu ? (D1 chỉ nhận 100 tham số mỗi câu).
+ *
+ * Mọi câu chạy qua file này đều được đếm số dòng đọc và ghi (meta của kết quả) vào bộ đếm mức dùng gói miễn phí
+ * (usageCounter.js, chỉ cộng số trong bộ nhớ). Vì vậy KHÔNG gọi thẳng `db().prepare(...)` ở nơi khác: câu đó sẽ không được đếm.
  */
 
 /** Database D1 của Worker. */
@@ -96,21 +100,30 @@ const prepare = (query) => {
     .bind(...query.params);
 };
 
-/** Dòng đầu tiên (object theo tên cột), hoặc null. */
-export const first = (query) => prepare(query).first();
+/** Ghi nhận số dòng đọc, ghi của một kết quả D1 rồi trả lại chính kết quả đó. */
+const counted = (result) => {
+  countRows(result.meta);
+  return result;
+};
+
+/** Dòng đầu tiên (object theo tên cột), hoặc null. Dùng `all()` thay cho `first()` của D1 vì `first()` không trả meta để đếm. */
+export const first = async (query) =>
+  counted(await prepare(query).all()).results[0] ?? null;
 
 /** Mọi dòng. */
-export const all = async (query) => (await prepare(query).all()).results;
+export const all = async (query) => counted(await prepare(query).all()).results;
 
 /** Chạy câu ghi. Trả { changes } là số dòng bị đổi; câu có RETURNING thì kèm rows. */
 export const run = async (query) => {
-  const result = await prepare(query).run();
+  const result = counted(await prepare(query).run());
   return { changes: result.meta.changes, rows: result.results || [] };
 };
 
 /** Nhiều câu đọc độc lập trong một lượt đi về (thay cho Promise.all của nhiều truy vấn). Trả mảng các mảng dòng. */
 export const readAll = async (queries) =>
-  (await db().batch(queries.map(prepare))).map((result) => result.results);
+  (await db().batch(queries.map(prepare))).map(
+    (result) => counted(result).results
+  );
 
 // ---------- Ghi nhiều bước: batch có điều kiện bảo vệ ----------
 
@@ -147,7 +160,7 @@ export const uniqueViolationOf = (err) => {
 /** Chạy một lô câu lệnh nguyên tử: tất cả thành công, hoặc không câu nào có hiệu lực. Trả mảng { changes, rows }. */
 export const batch = async (queries) =>
   (await db().batch(queries.map(prepare))).map((result) => ({
-    changes: result.meta.changes,
+    changes: counted(result).meta.changes,
     rows: result.results || [],
   }));
 

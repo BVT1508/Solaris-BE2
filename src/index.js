@@ -1,5 +1,7 @@
 import app from "./app.js";
+import { countRequest } from "./db/usageCounter.js";
 import { runScheduled } from "./jobs/index.js";
+import { scheduleUsageFlush } from "./services/usageService.js";
 
 /**
  * Điểm vào của Worker.
@@ -8,7 +10,12 @@ import { runScheduled } from "./jobs/index.js";
  *   RealtimeHub Durable Object giữ kết nối trực tiếp của màn góp ý
  */
 export default {
-  fetch: app.fetch,
+  fetch(request, env, ctx) {
+    // Đếm mức dùng gói miễn phí: cộng một số trong bộ nhớ và hẹn ghi xuống D1 sau response (services/usageService.js).
+    countRequest();
+    scheduleUsageFlush();
+    return app.fetch(request, env, ctx);
+  },
 
   async scheduled(controller, _env, ctx) {
     ctx.waitUntil(runScheduled(controller.cron));

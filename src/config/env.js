@@ -16,6 +16,16 @@ const optionalString = () =>
     .optional()
     .transform((value) => value || undefined);
 
+/** Biến dạng số: bỏ trống (hoặc không khai) thì lấy mặc định, có giá trị thì đổi sang số rồi kiểm. */
+const numberOr = (fallback, schema) =>
+  z.preprocess(
+    (value) =>
+      value === undefined || String(value).trim() === ""
+        ? fallback
+        : Number(value),
+    schema
+  );
+
 const envSchema = z
   .object({
     // "production" là mặc định trong wrangler.jsonc; chỉ .dev.vars mới đặt "development".
@@ -54,6 +64,21 @@ const envSchema = z
     LOG_LEVEL: z
       .enum(["debug", "info", "warn", "error", "silent"])
       .default("info"),
+    // Trần mỗi ngày (UTC) của gói miễn phí Cloudflare, để tính phần trăm đã dùng và cảnh báo. Xem services/usageService.js.
+    USAGE_LIMIT_REQUESTS: numberOr(100000, z.number().int().positive()),
+    USAGE_LIMIT_ROWS_READ: numberOr(5000000, z.number().int().positive()),
+    USAGE_LIMIT_ROWS_WRITTEN: numberOr(100000, z.number().int().positive()),
+    // Số đếm nằm trong bộ nhớ bao nhiêu giây rồi mới ghi xuống D1 (một lần ghi cho mọi request trong khoảng đó).
+    // Tối đa 25: việc ghi chạy sau response, Cloudflare chỉ giữ request sống thêm 30 giây.
+    USAGE_FLUSH_SECONDS: numberOr(15, z.number().min(0).max(25)),
+    // Khóa API của Resend để gửi email cảnh báo hạn mức. Chưa có thì không gửi email, chỉ ghi nhận ngưỡng đã vượt.
+    RESEND_API_KEY: optionalString(),
+    // Người gửi. Mặc định là địa chỉ thử của Resend: chỉ gửi được tới email của chính tài khoản Resend.
+    ALERT_EMAIL_FROM: z
+      .string()
+      .trim()
+      .optional()
+      .transform((value) => value || "Solaris <onboarding@resend.dev>"),
   })
   .refine(
     (env) =>
@@ -105,6 +130,12 @@ const env = loadEnv({
   GOOGLE_CLIENT_SECRET: bindings.GOOGLE_CLIENT_SECRET,
   CLOUDINARY_URL: bindings.CLOUDINARY_URL,
   LOG_LEVEL: bindings.LOG_LEVEL,
+  USAGE_LIMIT_REQUESTS: bindings.USAGE_LIMIT_REQUESTS,
+  USAGE_LIMIT_ROWS_READ: bindings.USAGE_LIMIT_ROWS_READ,
+  USAGE_LIMIT_ROWS_WRITTEN: bindings.USAGE_LIMIT_ROWS_WRITTEN,
+  USAGE_FLUSH_SECONDS: bindings.USAGE_FLUSH_SECONDS,
+  RESEND_API_KEY: bindings.RESEND_API_KEY,
+  ALERT_EMAIL_FROM: bindings.ALERT_EMAIL_FROM,
 });
 
 export default env;

@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { all, first, sql } from "../db/d1.js";
 import { can } from "../policies/policy.js";
 import { resolveSessionByHash } from "../services/authService.js";
+import { flushUsage } from "../services/usageService.js";
 import { randomToken } from "../utils/hash.js";
 import { isId } from "../utils/id.js";
 import logger from "../utils/logger.js";
@@ -254,6 +255,8 @@ export class RealtimeHub extends DurableObject {
       }
     }
     await this.ctx.storage.setAlarm(Date.now() + RECHECK_MS);
+    // Số dòng D1 mà object này đã đọc (lệnh theo dõi, lượt kiểm phiên): ghi xuống bảng mức dùng, mỗi 10 phút một lần.
+    await flushUsage();
   }
 }
 
