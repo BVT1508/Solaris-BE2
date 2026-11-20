@@ -258,6 +258,7 @@ Hạn mức nằm trong dữ liệu (300 góp ý mỗi link mỗi vòng, 200 tr�
 | -------------- | --------------------------------------------------------------------- | -------------------------------- |
 | `23 * * * *`   | xóa phiên, state OAuth hết hạn, bộ đếm cũ (đã làm)                    | khung                            |
 | `23 * * * *`   | dọn `storage_trash`: xóa file trên kho theo lô                        | gói X2, vào `storageJobs.js`     |
+| `23 * * * *`   | kiểm hạn mức gói miễn phí, gửi email khi vượt 70% hoặc 90% (mục 10)   | `usageJobs.js`                   |
 | `41 */6 * * *` | dọn file tạm trên kho quá 1 ngày (`purgeStalePending` cũ)             | gói X2, vào `storageJobs.js`     |
 | `41 */6 * * *` | dọn bản cũ của đơn bàn giao quá 30 ngày (`purgeDeliveredVersions` cũ) | gói Y4, vào `maintenanceJobs.js` |
 
@@ -291,15 +292,18 @@ Khóa lấy từ `env.CLOUDINARY` (`apiKey`, `apiSecret`, `cloudName`); chưa c�
 
 **Cấu hình** (`src/config/env.js`, kiểm bằng zod lúc nạp; sai thì Worker không khởi động và báo rõ biến nào).
 
-| Biến                                       | Bản deploy                                  | Máy dev       | Ghi chú                                                                                                 |
-| ------------------------------------------ | ------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
-| `ENVIRONMENT`                              | `vars`: `production`                        | `development` | Thay `NODE_ENV`. Trong code dùng `env.IS_DEV`.                                                          |
-| `OWNER_EMAIL`                              | `wrangler secret put`                       | `.dev.vars`   | Bắt buộc.                                                                                               |
-| `CLIENT_ORIGINS`                           | `vars`: địa chỉ `https://<tên>.workers.dev` | `.dev.vars`   | Origin đầu là `env.FRONTEND_URL`: gốc của link chia sẻ, đoạn nhúng, nơi chuyển về sau đăng nhập Google. |
-| `SESSION_HOURS`, `LOG_LEVEL`               | `vars`                                      | `.dev.vars`   |                                                                                                         |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `wrangler secret put`                       | `.dev.vars`   | Cùng có hoặc cùng trống. Trống thì đăng nhập Google trả 503.                                            |
-| `CLOUDINARY_URL`                           | `wrangler secret put`                       | `.dev.vars`   | Trống thì API file trả 503.                                                                             |
-| `API_PUBLIC_URL`, `COOKIE_DOMAIN`          | để trống                                    | tùy           | Một Worker một địa chỉ nên không cần.                                                                   |
+| Biến                                                                        | Bản deploy                                  | Máy dev       | Ghi chú                                                                                                 |
+| --------------------------------------------------------------------------- | ------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| `ENVIRONMENT`                                                               | `vars`: `production`                        | `development` | Thay `NODE_ENV`. Trong code dùng `env.IS_DEV`.                                                          |
+| `OWNER_EMAIL`                                                               | `wrangler secret put`                       | `.dev.vars`   | Bắt buộc.                                                                                               |
+| `CLIENT_ORIGINS`                                                            | `vars`: địa chỉ `https://<tên>.workers.dev` | `.dev.vars`   | Origin đầu là `env.FRONTEND_URL`: gốc của link chia sẻ, đoạn nhúng, nơi chuyển về sau đăng nhập Google. |
+| `SESSION_HOURS`, `LOG_LEVEL`                                                | `vars`                                      | `.dev.vars`   |                                                                                                         |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`                                  | `wrangler secret put`                       | `.dev.vars`   | Cùng có hoặc cùng trống. Trống thì đăng nhập Google trả 503.                                            |
+| `CLOUDINARY_URL`                                                            | `wrangler secret put`                       | `.dev.vars`   | Trống thì API file trả 503.                                                                             |
+| `USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN` | `vars`                                      | tùy           | Trần mỗi ngày để tính phần trăm mức dùng (mục 10). Mặc định 100.000, 5.000.000, 100.000.                |
+| `USAGE_FLUSH_SECONDS`                                                       | để trống (15)                               | tùy           | Số đếm nằm trong bộ nhớ bao lâu rồi mới ghi xuống D1; 0 tới 25.                                         |
+| `RESEND_API_KEY`, `ALERT_EMAIL_FROM`                                        | `wrangler secret put`, tùy chọn             | `.dev.vars`   | Email cảnh báo hạn mức. Không có khóa thì không gửi email.                                              |
+| `API_PUBLIC_URL`, `COOKIE_DOMAIN`                                           | để trống                                    | tùy           | Một Worker một địa chỉ nên không cần.                                                                   |
 
 Bỏ hẳn: `PORT`, `HOST`, `MONGODB_*`, `FRONTEND_DIST`, `STORAGE_DRIVER`, `R2_*`. `.dev.vars` không commit; không in giá trị ra màn hình hay tài liệu.
 
@@ -415,6 +419,33 @@ Mọi request vẫn `ok` kể cả cái 41 ms: Cloudflare có dung sai nhưng kh
 **Đã khép (19/11/2026):** phiên điều phối kết luận không hạ trần 500 của danh sách góp ý, không cần hỏi chủ dự án về gói trả phí lúc này; việc giảm CPU coi như xong. Nếu về sau số thật cho thấy danh sách 500 bài có nét vẽ thường xuyên vượt, các lựa chọn vẫn là: hạ `LIST_LIMIT` xuống 200 (cờ `truncated` đã có sẵn, nhưng tài liệu API đang ghi 500), phân trang danh sách góp ý (đổi hợp đồng), hoặc gói trả phí.
 
 Lát mẫu (đăng nhập, `me`) chỉ làm vài phép băm và một hai truy vấn, không đáng lo. Không đo được CPU thật trên máy dev.
+
+**CPU của các thao tác thật trên bản thử** (phiên điều phối đo ngày 21/11/2026 trên `app-thu`, tức Cloudflare thật, khi chạy `x_kiem_gop_y_team`, `thu-dong-thoi`, `thu-realtime-y`; 268 request ghi được, `cpuTime` ms): trung vị 4, p90 8, p99 20, cao nhất 23. Có 13 request trên 10 ms, **không request nào bị từ chối**. Các đường đắt nhất:
+
+| Đường                             | Trung vị | Cao nhất  |
+| --------------------------------- | -------- | --------- |
+| `POST /deliverables/:id/feedback` | 6        | 23        |
+| `POST /orders`                    | 4        | 20        |
+| `POST /r/:token/feedback`         | 5        | 17        |
+| `PUT /orders/:id/members`         | 5        | 17        |
+| `POST /members`                   | 7        | 14        |
+| `GET /orders/:id/activity`        | 11       | (một mẫu) |
+
+Đọc số: phần lớn request nằm dưới 10 ms; khoảng 5% vượt (đuôi tới 23 ms) và vẫn được phục vụ nhờ dung sai của Cloudflare, là thứ không có tài liệu nên không coi là bảo đảm.
+
+### Mức dùng theo ngày và cảnh báo
+
+Gói miễn phí không tính tiền; chạm trần ngày (100.000 request, 100.000 dòng D1 ghi, 5 triệu dòng D1 đọc, tính theo tài khoản) thì bị ngừng phục vụ tới 00:00 UTC, và Cloudflare không báo trước. Hệ thống tự đếm ba chỉ số đó và báo sớm (`services/usageService.js`, bảng ở `migrations/0002_usage.sql`).
+
+- **Đếm không thêm lượt đi về nào trên đường của request.** Điểm vào của Worker (`index.js`) cộng một request; lớp `db/d1.js` cộng `meta.rows_read` và `meta.rows_written` của MỌI kết quả D1 (vì vậy `first()` chạy bằng `all()`: `first()` của D1 không trả `meta`). Cả hai chỉ cộng số trong bộ nhớ của isolate (`db/usageCounter.js`).
+- **Ghi xuống theo lô.** Request đầu tiên sau một lần ghi hẹn một lần ghi kế sau `USAGE_FLUSH_SECONDS` giây (mặc định 15), chạy sau response bằng `waitUntil` (thời gian chờ không tính CPU). Mọi request trong khoảng đó đi chung một câu UPSERT vào `usage_daily`, tức một dòng ghi. Chi phí: tải dày đặc cả ngày thì nhiều nhất 5.760 dòng ghi mỗi isolate (dưới 6% hạn mức ghi, khoảng 0,06 dòng mỗi request ở mức 100.000 request); tải thưa thì mỗi đợt request một dòng. CPU của lần ghi (khoảng 0,5 ms) tính vào request đã hẹn nó. Hệ quả phụ: request đó hiện trong `wrangler tail` chậm khoảng 15 giây, với `wallTime` dài.
+- **Là số ước lượng, thường thấp hơn số của Cloudflare**: isolate bị tắt trong lúc chờ thì mất phần chưa ghi; chỉ đếm Worker này (bản thử, `wrangler d1 execute`, migration, trang quản trị ăn chung hạn mức tài khoản mà không được đếm); lô bị hoàn tác vì guard sai vẫn bị tính dòng đọc mà không đếm được. Durable Object ghi phần của nó xuống trong `alarm` (10 phút một lần khi có thành viên đang nối).
+- **Việc đếm không bao giờ làm hỏng request**: lỗi khi ghi chỉ ghi log và giữ số lại cho lượt sau. Chưa có bảng (chưa áp migration `0002`) thì tạm nghỉ 10 phút rồi thử lại.
+- **Cảnh báo**: ngưỡng 70% (`warning`) và 90% (`critical`). Mỗi (ngày, chỉ số, ngưỡng) là một dòng của `usage_alerts` (khóa chính), nên chỉ báo một lần. Kiểm ở hai chỗ: ngay sau lần ghi số đếm nào làm tổng chạm một ngưỡng mà isolate đó chưa đưa đi kiểm, và trong việc định kỳ mỗi giờ (cũng là chỗ thử lại email gửi lỗi). Chống gửi trùng khi hai isolate cùng chạy: câu `UPDATE ... SET emailed_at ... WHERE emailed_at IS NULL RETURNING` chỉ trả dòng cho một bên; thêm `Idempotency-Key` phía Resend.
+- **Email qua Resend** (`services/mailService.js`), chỉ khi có `RESEND_API_KEY`. Đã tra tài liệu ngày 21/11/2026: binding `send_email` của Cloudflare bắt người gửi thuộc một tên miền đã đưa vào Cloudflare, nên không dùng được với tài khoản chỉ có `workers.dev`; Cloudflare cũng không có thông báo sẵn nào cho hạn mức ngày của Workers và D1 gói miễn phí. Resend cho gửi từ `onboarding@resend.dev` tới email của chính tài khoản Resend mà không cần tên miền; gói miễn phí 100 email mỗi ngày.
+- **`GET /api/v1/usage`** (chỉ quản trị viên): số đã ghi cộng phần isolate đang trả lời chưa kịp ghi. Hợp đồng ở `docs/api-bo-sung.md`.
+
+Đã thử trên máy dev (`qa-scripts/cf/x_kiem_muc_dung.mjs`, 26 phép, email đi vào một server giả). Chưa thử trên Cloudflare thật, và chưa gửi email thật qua Resend.
 
 ## 11. Cấu trúc thư mục, quy ước code, mẫu
 

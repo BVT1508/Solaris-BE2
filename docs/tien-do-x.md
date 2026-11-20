@@ -4,7 +4,7 @@ Cập nhật: 18/11/2026 (khuya). Phiên X làm các gói X1 tới X4 theo `docs
 
 ## Bàn giao (đọc mục này trước nếu vừa mất context)
 
-Cập nhật lần cuối: 19/11/2026, sáng. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
+Cập nhật lần cuối: 21/11/2026. Mục này đủ để phiên X làm tiếp mà không cần nhớ gì.
 
 **Tôi là ai, làm gì.** Phiên X: giữ các file dùng chung (danh sách ở `docs/kien-truc.md` mục 12) và làm các gói X1 tới X4. Phiên Y (`local_34c8b246-b285-49df-9964-6fe03114c3a9`) làm Y1 tới Y4 trong cùng thư mục, cùng nhánh `main`. Phiên điều phối: `local_819fd873-aa60-4d35-8bf3-376b6cb0641d`.
 
@@ -61,7 +61,26 @@ File dùng chung đã sửa từ nửa đêm: `src/jobs/index.js` (kích riêng 
 - Đẩy file thẳng lên Cloudinary từ kịch bản đôi khi hết giờ kết nối; chạy lại là qua.
 - Log của chính `wrangler dev` in nguyên đường dẫn có token của link (chỉ trên máy dev).
 
-**Tin của phiên điều phối chưa làm xong:** không còn; hai việc của sáng 19/11 đã xong (mục "Đợt 19/11"). Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+**Tin của phiên điều phối chưa làm xong:** không còn. Việc mới nhất là đợt 21/11 (đếm mức dùng và cảnh báo), đã xong phần code và thử trên máy dev, chờ phiên điều phối áp migration `0002` và deploy; xem mục "Đợt 21/11". Việc deploy do phiên điều phối làm. Việc còn mở cho phiên Y: `adoptPageShot` nên đổi sang `storage.adoptPending`.
+
+## Đợt 21/11: đếm mức dùng gói miễn phí và cảnh báo
+
+Phiên điều phối giao theo yêu cầu của chủ dự án. Cách làm việc đã đổi (`CLAUDE.md`, commit `caf56fc`): thước đo là bản chạy thật trên Cloudflare; phiên điều phối lo deploy (bản chính `app`, bản thử `app-thu`), X chỉ commit rồi nhắn. **Không xóa D1 cục bộ nữa**: muốn dữ liệu trống thì dùng thư mục `--persist-to` mới (đợt này: `.wrangler/state-x-usage`, `-usage2`, `-usage3`); `x_server.ps1 reset` xóa `state-x` nên đừng dùng khi chưa hỏi.
+
+- [x] Số CPU của bản thử (268 request, trung vị 4, p99 20) đã ghi vào `docs/kien-truc.md` mục 10.
+- [x] **Đếm**: `migrations/0002_usage.sql` (bảng `usage_daily`, `usage_alerts`); `src/db/usageCounter.js` (ba con số trong bộ nhớ); `src/db/d1.js` cộng `meta.rows_read`, `meta.rows_written` của mọi kết quả (`first()` giờ chạy bằng `all()`); `src/index.js` cộng request và hẹn ghi; `src/services/usageService.js` ghi một câu UPSERT sau `USAGE_FLUSH_SECONDS` giây (mặc định 15) bằng `waitUntil`. Không thêm lượt đi về D1 nào trên đường của request.
+- [x] **`GET /api/v1/usage`** chỉ quản trị viên, đúng hình dạng phiên điều phối đưa; hợp đồng ở `docs/api-bo-sung.md`.
+- [x] **Cảnh báo**: ngưỡng 70% và 90%, kiểm ngay sau lần ghi số đếm và trong việc mỗi giờ "kiểm hạn mức gói miễn phí" (`src/jobs/usageJobs.js`); mỗi (ngày, chỉ số, ngưỡng) một dòng `usage_alerts`; email qua Resend (`src/services/mailService.js`) chỉ khi có `RESEND_API_KEY`, gửi lỗi thì giờ sau thử lại.
+- [x] Cấu hình: `USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN` (ở `vars`), `USAGE_FLUSH_SECONDS`, `RESEND_API_KEY`, `ALERT_EMAIL_FROM`; riêng máy dev có `RESEND_API_URL` để trỏ sang server email giả.
+- [x] Tài liệu: `README.md` mục "Hạn mức gói miễn phí và cảnh báo", `docs/kien-truc.md` mục 7, 9, 10, `docs/api-bo-sung.md`.
+
+Đã thử, tất cả trên **máy dev**: `qa-scripts/cf/x_kiem_muc_dung.mjs` pha 1 18/18 (quyền, hình dạng, đếm, ngưỡng, ghi nhận khi chưa có khóa) và pha 2 8/8 (gửi lỗi 500 rồi gửi lại thành công, không gửi trùng, đúng dạng lời gọi Resend) với server email giả; cả bộ Postman trên D1 trống 406 request, 1377/1377 (`ket-qua/2026-11-21_011451_x-muc-dung`), server không nạp lại lần nào; `npm run lint` sạch; chưa áp migration thì request vẫn chạy và chỉ có một dòng cảnh báo trong log. **Chưa thử**: trên Cloudflare thật (hành vi `waitUntil` chờ 15 giây, số `meta` của D1 thật), và chưa gửi email thật qua Resend (chưa có khóa).
+
+Số đo phụ từ lượt Postman đó (423 request): 4.928 dòng đọc, 1.204 dòng ghi, tức khoảng 12 dòng đọc và 3 dòng ghi mỗi request của bộ thử. Với tỷ lệ này, **trần chạm trước là 100.000 dòng ghi** (khoảng 35.000 request kiểu bộ thử), không phải 100.000 request.
+
+Việc phiên điều phối cần làm: áp `0002_usage.sql` lên cả hai D1 TRƯỚC khi deploy code mới (thiếu bảng thì không lỗi nhưng không đếm), deploy bản thử, thử thật. Bật email: chủ dự án đăng ký Resend bằng đúng `OWNER_EMAIL`, tạo API key, đặt `RESEND_API_KEY` (xem README).
+
+File dùng chung đã sửa đợt này: `src/db/d1.js`, `src/index.js`, `src/routes/index.js`, `src/jobs/index.js`, `src/config/env.js`, `src/realtime/realtimeHub.js` (thêm một dòng ghi số đếm trong `alarm`), `wrangler.jsonc`, `.dev.vars.example`.
 
 ## Đợt 19/11
 

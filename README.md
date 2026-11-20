@@ -66,7 +66,7 @@ Việc deploy do chủ dự án (hoặc phiên được giao) làm, sau khi `wra
    ```
 
 2. **Migration** lên D1 thật: `npx wrangler d1 migrations apply DB --remote -c wrangler.deploy.jsonc`.
-3. **Khóa bí mật**, mỗi khóa một lệnh `npx wrangler secret put <TÊN> -c wrangler.deploy.jsonc`: `OWNER_EMAIL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CLOUDINARY_URL`. Ý nghĩa từng khóa ghi ở `.dev.vars.example`. Giá trị thường (`ENVIRONMENT`, `CLIENT_ORIGINS`) nằm ở `vars` của cấu hình.
+3. **Khóa bí mật**, mỗi khóa một lệnh `npx wrangler secret put <TÊN> -c wrangler.deploy.jsonc`: `OWNER_EMAIL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `CLOUDINARY_URL`, và tùy chọn `RESEND_API_KEY` (email cảnh báo hạn mức, xem mục cuối). Ý nghĩa từng khóa ghi ở `.dev.vars.example`. Giá trị thường (`ENVIRONMENT`, `CLIENT_ORIGINS`) nằm ở `vars` của cấu hình.
 4. **Google.** Ở Google Cloud Console, OAuth client loại Web, thêm Authorized redirect URI: `<origin của Worker>/api/v1/auth/google/callback`. Origin này phải trùng origin đầu tiên của `CLIENT_ORIGINS`.
 5. **Frontend.** `npm run sync-frontend` để bản build mới nhất nằm trong `frontend-dist/`.
 6. **Deploy:** `npx wrangler deploy -c wrangler.deploy.jsonc`.
@@ -96,3 +96,35 @@ Số đo `cpuTime` trên Cloudflare thật (19/11/2026):
 | Kiểm một nét vẽ 2.000 điểm               | dưới 0,1               |
 
 Bảng đầy đủ, cách đo và các luật viết code để giữ CPU thấp: [docs/kien-truc.md](docs/kien-truc.md) mục 10 và 11.
+
+## Hạn mức gói miễn phí và cảnh báo
+
+**Gói miễn phí không bao giờ tính tiền.** Chạm trần thì không bị trừ tiền mà bị ngừng phục vụ tới 00:00 UTC (07:00 giờ Việt Nam), lúc Cloudflare đặt lại hạn mức ngày:
+
+| Trần mỗi ngày (tính theo tài khoản Cloudflare) | Chạm trần thì                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 100.000 request vào Worker                     | Cloudflare chặn request trước khi tới Worker (trang lỗi 1027): API và đăng nhập ngừng chạy |
+| 100.000 dòng D1 ghi                            | mọi truy vấn D1 lỗi: API trả 500, không đăng nhập, không lưu được gì                       |
+| 5.000.000 dòng D1 đọc                          | như trên                                                                                   |
+
+Cloudflare không báo trước khi sắp chạm trần, nên hệ thống tự đếm và báo sớm.
+
+**Xem mức dùng.** Quản trị viên gọi `GET /api/v1/usage` (màn quản trị của frontend hiển thị): ba chỉ số trên, số đã dùng trong ngày, phần trăm của trần, và mức `ok`, `warning` (từ 70%), `critical` (từ 90%). Hình dạng response: [docs/api-bo-sung.md](docs/api-bo-sung.md).
+
+**Số này là ước lượng**, thường thấp hơn số thật của Cloudflare:
+
+- Chỉ đếm Worker này và database của nó. Hạn mức của Cloudflare tính chung cho cả tài khoản: bản thử (`app-thu`), lệnh `wrangler d1 execute`, việc áp migration và thao tác trên trang quản trị Cloudflare ăn chung hạn mức mà không nằm trong số đếm.
+- Số đếm nằm trong bộ nhớ khoảng 15 giây rồi mới ghi xuống database (một dòng ghi cho mọi request trong khoảng đó, để việc đếm gần như không tốn hạn mức). Phần chưa kịp ghi mất khi Cloudflare tắt tiến trình.
+
+Số chính xác xem ở trang quản trị Cloudflare (Workers & Pages, và D1).
+
+**Email cảnh báo.** Khi một chỉ số lần đầu trong ngày vượt 70% hoặc 90%, hệ thống ghi nhận (bảng `usage_alerts`) và gửi một email tới `OWNER_EMAIL`; mỗi chỉ số, mỗi ngưỡng, mỗi ngày đúng một lần. Việc kiểm chạy ngay sau mỗi lần ghi số đếm và trong việc định kỳ mỗi giờ; gửi lỗi thì giờ sau thử lại.
+
+Email gửi qua [Resend](https://resend.com) (gói miễn phí: 100 email mỗi ngày, 3.000 mỗi tháng). Worker trên địa chỉ `workers.dev` không có tên miền nên không dùng được cách gửi email của chính Cloudflare. Bật email:
+
+1. Đăng ký Resend bằng **đúng địa chỉ `OWNER_EMAIL`**. Chưa có tên miền thì Resend chỉ cho gửi từ `onboarding@resend.dev` tới email của chính tài khoản Resend, nên hai địa chỉ phải trùng nhau.
+2. Tạo một API key ở Resend, rồi đặt làm khóa bí mật: `npx wrangler secret put RESEND_API_KEY -c wrangler.deploy.jsonc`.
+
+Chưa đặt `RESEND_API_KEY` thì hệ thống vẫn đếm, vẫn ghi nhận ngưỡng đã vượt và `GET /api/v1/usage` vẫn dùng được; chỉ không có email. Đặt khóa sau thì ngưỡng đã vượt trong ngày mà chưa báo sẽ được gửi ở lượt kiểm kế tiếp. Sau này có tên miền riêng đã xác minh ở Resend thì đặt `ALERT_EMAIL_FROM` để đổi người gửi.
+
+Trần dùng để tính phần trăm đặt ở `vars` của `wrangler.jsonc` (`USAGE_LIMIT_REQUESTS`, `USAGE_LIMIT_ROWS_READ`, `USAGE_LIMIT_ROWS_WRITTEN`): đổi khi Cloudflare đổi hạn mức hoặc khi nâng gói. Bảng đếm tạo bằng migration `0002_usage.sql`; chưa áp migration này thì hệ thống chạy bình thường nhưng không đếm.
