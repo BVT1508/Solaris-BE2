@@ -13,6 +13,7 @@ import feedbackRoutes, {
 } from "./feedbackRoutes.js";
 import memberRoutes from "./memberRoutes.js";
 import orderRoutes from "./orderRoutes.js";
+import organizationRoutes from "./organizationRoutes.js";
 import publicFeedbackRoutes from "./publicFeedbackRoutes.js";
 import publicRoutes from "./publicRoutes.js";
 import roundRoutes from "./roundRoutes.js";
@@ -43,6 +44,7 @@ for (const prefix of [
   "/feedback",
   "/usage",
   "/infrastructure",
+  "/organization",
 ]) {
   route.use(`${prefix}/*`, authCtrl.protect);
 }
@@ -66,6 +68,9 @@ route.route("/feedback", feedbackRoutes);
 // Mức dùng gói miễn phí của Cloudflare, cho quản trị viên. Route mới, backend cũ không có.
 route.route("/usage", usageRoutes);
 route.route("/infrastructure", infrastructureRoutes);
+
+// Việc cấp tổ chức: khóa nhúng chung cho mọi sản phẩm web. Route mới, backend cũ không có.
+route.route("/organization", organizationRoutes);
 
 // Khách mở link chia sẻ, không đăng nhập. Giới hạn tốc độ riêng vì ai có link (hoặc đang dò token) cũng gọi được.
 route.use("/r/*", publicLimiter);

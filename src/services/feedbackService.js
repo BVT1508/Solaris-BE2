@@ -836,21 +836,29 @@ export async function verdictByGuest(guest, id, input) {
 }
 
 /**
- * So khóa mà bridge trong site báo lên với khóa của sản phẩm, không để lộ khóa (so sánh thời gian hằng).
- * Đúng thì ghi nhận site đã nhúng bridge. Sản phẩm không phải web thì luôn sai.
+ * So khóa mà bridge trong site báo lên, không để lộ khóa (so sánh thời gian hằng). Hợp lệ khi trùng một trong hai:
+ *   - khóa riêng của sản phẩm (sdkKey): đoạn script theo từng sản phẩm, như trước nay;
+ *   - khóa nhúng chung của tổ chức sở hữu sản phẩm (services/organizationService.js): một đoạn script dán vào bộ khung
+ *     website của team, dùng cho mọi sản phẩm web.
+ * Đúng thì ghi nhận site đã nhúng bridge và qua khóa nào. Sản phẩm không phải web thì luôn sai.
  */
 async function matchSdkKey(deliverableId, sdkKey) {
-  const d = await first(
-    sql`SELECT type, sdk_key FROM deliverables WHERE id = ${deliverableId}`
-  );
+  const d = await first(sql`
+    SELECT d.type, d.sdk_key, o.embed_key
+    FROM deliverables d JOIN organizations o ON o.id = d.org_id
+    WHERE d.id = ${deliverableId}`);
   if (!d || d.type !== "web") return false;
-  const valid = safeEqual(d.sdk_key || "", sdkKey);
-  if (valid) {
-    const at = now();
-    await run(sql`
-      UPDATE deliverables SET bridge_seen_at = ${at}, updated_at = ${at} WHERE id = ${deliverableId}`);
-  }
-  return valid;
+  // Luôn so cả hai khóa (không dừng sớm), để thời gian trả lời không cho biết khóa gửi lên trượt ở khóa nào.
+  const ownKey = safeEqual(d.sdk_key || "", sdkKey);
+  const sharedKey = safeEqual(d.embed_key || "", sdkKey);
+  if (!ownKey && !sharedKey) return false;
+
+  const at = now();
+  await run(sql`
+    UPDATE deliverables
+    SET bridge_seen_at = ${at}, bridge_key_kind = ${ownKey ? "deliverable" : "organization"}, updated_at = ${at}
+    WHERE id = ${deliverableId}`);
+  return true;
 }
 
 /**

@@ -175,6 +175,8 @@ export async function toPublicDeliverable(d, { showKey, rounds }) {
       )
     ),
     bridgeSeenAt: d.bridgeSeenAt || null,
+    // Site được thấy lần gần nhất qua khóa riêng của sản phẩm ("deliverable") hay khóa chung của tổ chức ("organization").
+    bridgeKeyKind: d.bridgeKeyKind || null,
     status: d.status,
     archivedAt: d.archivedAt || null,
     createdBy: d.createdBy || null,

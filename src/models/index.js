@@ -13,6 +13,9 @@ import { defineModel, json } from "../db/model.js";
 export const Organization = defineModel("organizations", {
   id: "id",
   name: "name",
+  // Khóa nhúng chung cho mọi sản phẩm web của tổ chức (services/organizationService.js). Không trả ra đường của khách.
+  embedKey: "embed_key",
+  embedKeyRotatedAt: "embed_key_rotated_at",
   createdAt: "created_at",
   updatedAt: "updated_at",
 });
@@ -93,6 +96,8 @@ export const Deliverable = defineModel("deliverables", {
   archivedAt: "archived_at",
   createdBy: "created_by",
   bridgeSeenAt: "bridge_seen_at",
+  // Lần gần nhất site được thấy là qua khóa nào: "deliverable" (khóa riêng) hay "organization" (khóa chung).
+  bridgeKeyKind: "bridge_key_kind",
   feedbackSeq: "feedback_seq",
   version: "version",
   createdAt: "created_at",
